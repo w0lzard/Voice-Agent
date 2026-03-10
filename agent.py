@@ -5,9 +5,11 @@ import json
 import time
 from pathlib import Path
 from dotenv import load_dotenv
+from openai.types.beta.realtime.session import InputAudioTranscription, TurnDetection
 
 from livekit import agents, api
-from livekit.agents import AgentSession, Agent, RoomInputOptions
+from livekit.agents import AgentSession, Agent
+from livekit.agents.voice.room_io import RoomOptions, AudioInputOptions
 from livekit.plugins import (
     openai,
     deepgram,
@@ -70,8 +72,35 @@ def _get_float_env(name: str, default: float) -> float:
         return default
 
 
+def _get_int_env(name: str, default: int) -> int:
+    raw = os.getenv(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        logger.warning(f"Invalid int for {name}='{raw}', using default {default}")
+        return default
+
+
+def _get_bool_env(name: str, default: bool) -> bool:
+    raw = os.getenv(name, "").strip().lower()
+    if not raw:
+        return default
+    if raw in {"1", "true", "yes", "on"}:
+        return True
+    if raw in {"0", "false", "no", "off"}:
+        return False
+    logger.warning(f"Invalid bool for {name}='{raw}', using default {default}")
+    return default
+
+
 def _get_default_language() -> str:
     return os.getenv("AGENT_DEFAULT_LANGUAGE", "hi").strip().lower() or "hi"
+
+
+def _use_realtime_audio() -> bool:
+    return _get_bool_env("OPENAI_REALTIME_AUDIO", True)
 
 
 def _repair_mojibake(value: str | None) -> str | None:
@@ -93,14 +122,14 @@ def _repair_mojibake(value: str | None) -> str | None:
 
 def _default_first_message(agent_name: str, company: str, language: str) -> str:
     if language == "hi":
-        return f"Namaste, main {agent_name} {company} se bol rahi hoon. Kya aap mujhe sun pa rahe hain?"
+        return f"Namaste, main {agent_name} {company} se bol rahi hoon. Kya abhi baat karna theek rahega?"
     return f"Hello, this is {agent_name} from {company}. Can you hear me?"
 
 
 def _default_reprompt(language: str) -> str:
     if language == "hi":
-        return "Namaste, kya aap mujhe sun pa rahe hain?"
-    return "I am here. Can you hear me clearly?"
+        return "Namaste, kya abhi baat karna theek rahega?"
+    return "Hello, is this a good time to talk?"
 
 
 def _safe_log_text(value: str, limit: int = 200) -> str:
@@ -252,10 +281,28 @@ def _build_tts():
     
     # Default to OpenAI
     logger.info("Using OpenAI TTS")
-    model = os.getenv("OPENAI_TTS_MODEL", "gpt-4o-mini-tts")
-    voice = os.getenv("OPENAI_TTS_VOICE", "alloy")
-    speed = _get_float_env("OPENAI_TTS_SPEED", 1.05)
-    return openai.TTS(model=model, voice=voice, speed=speed)
+    model = os.getenv("OPENAI_TTS_MODEL", "tts-1")
+    voice = os.getenv("OPENAI_TTS_VOICE", "shimmer")
+    speed = _get_float_env("OPENAI_TTS_SPEED", 1.0)
+    response_format = os.getenv("OPENAI_TTS_RESPONSE_FORMAT", "pcm").strip() or "pcm"
+    instructions = (
+        os.getenv("OPENAI_TTS_INSTRUCTIONS", "").strip()
+        or "Speak in a soft, smooth, natural feminine voice. Avoid sharp emphasis and keep the delivery clear for phone audio."
+    )
+    logger.info(
+        "OpenAI TTS config: model=%s voice=%s speed=%.2f format=%s",
+        model,
+        voice,
+        speed,
+        response_format,
+    )
+    return openai.TTS(
+        model=model,
+        voice=voice,
+        speed=speed,
+        instructions=instructions,
+        response_format=response_format,
+    )
 
 
 def _build_stt():
@@ -275,10 +322,64 @@ def _build_stt():
     # Default/fallback: OpenAI STT
     model = os.getenv("OPENAI_STT_MODEL", "gpt-4o-mini-transcribe")
     language = os.getenv("OPENAI_STT_LANGUAGE", "").strip() or default_language
-    logger.info(f"Using OpenAI STT (language={language or 'auto'})")
+    use_realtime = _get_bool_env("OPENAI_STT_USE_REALTIME", True)
+    turn_detection = {
+        "type": "server_vad",
+        "threshold": _get_float_env("OPENAI_STT_TURN_THRESHOLD", 0.45),
+        "prefix_padding_ms": _get_int_env("OPENAI_STT_PREFIX_PADDING_MS", 250),
+        "silence_duration_ms": _get_int_env("OPENAI_STT_SILENCE_DURATION_MS", 220),
+    }
+    logger.info(
+        "Using OpenAI STT (language=%s, realtime=%s)",
+        language or "auto",
+        use_realtime,
+    )
+    stt_kwargs = {
+        "model": model,
+        "use_realtime": use_realtime,
+    }
+    if use_realtime:
+        stt_kwargs["turn_detection"] = turn_detection
     if language:
-        return openai.STT(model=model, language=language)
-    return openai.STT(model=model)
+        return openai.STT(language=language, **stt_kwargs)
+    return openai.STT(**stt_kwargs)
+
+
+def _build_realtime_llm():
+    """Configure OpenAI realtime audio for lower-latency voice output."""
+    model = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime")
+    voice = os.getenv("OPENAI_REALTIME_VOICE", "marin")
+    speed = _get_float_env("OPENAI_REALTIME_SPEED", 1.0)
+    transcription_model = os.getenv("OPENAI_REALTIME_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
+    transcription_language = os.getenv("OPENAI_REALTIME_TRANSCRIBE_LANGUAGE", "").strip() or _get_default_language()
+    noise_reduction = os.getenv("OPENAI_REALTIME_INPUT_NOISE_REDUCTION", "near_field").strip() or None
+    turn_detection = TurnDetection(
+        type="server_vad",
+        threshold=_get_float_env("OPENAI_REALTIME_TURN_THRESHOLD", 0.40),
+        prefix_padding_ms=_get_int_env("OPENAI_REALTIME_PREFIX_PADDING_MS", 220),
+        silence_duration_ms=_get_int_env("OPENAI_REALTIME_SILENCE_DURATION_MS", 180),
+        create_response=True,
+    )
+    input_audio_transcription = InputAudioTranscription(
+        model=transcription_model,
+        language=transcription_language,
+    )
+    logger.info(
+        "Using OpenAI Realtime audio (model=%s voice=%s language=%s speed=%.2f)",
+        model,
+        voice,
+        transcription_language or "auto",
+        speed,
+    )
+    return openai.realtime.RealtimeModel(
+        model=model,
+        voice=voice,
+        modalities=["text", "audio"],
+        speed=speed,
+        input_audio_transcription=input_audio_transcription,
+        input_audio_noise_reduction=noise_reduction,
+        turn_detection=turn_detection,
+    )
 
 
 def _build_vad():
@@ -481,16 +582,52 @@ class OutboundAssistant(Agent):
             {language_instruction}
             
             Key behaviors:
-            1. Introduce yourself as {agent_name} from {company} when the user answers.
-            2. Be concise and respectful of the user's time.
-            2a. Keep every reply short (about 6-14 words) unless asked for detail.
-            3. Keep conversation focused on real-estate context (property, site visit, budget, location, timeline).
-            4. Use transfer_call ONLY when user clearly asks transfer (word must include "transfer" or "live agent").
-            5. Never trigger transfer from partial/unclear words.
-            6. If transfer intent is unclear, ask a clarification question instead of calling transfer_call.
-            7. Never call transfer_call on one-word or noisy utterances.
+            1. Your first spoken turn after the call is answered must be a brief intro only.
+            2. After the caller acknowledges, continue the conversation naturally.
+            3. Be concise and respectful of the user's time.
+            3a. Default to one short sentence.
+            3b. Ask only one question at a time.
+            3c. Keep every reply short unless the caller asks for detail.
+            4. Keep conversation focused on real-estate context (property, site visit, budget, location, timeline).
+            5. After the intro, ask whether it is a good time to talk before going deeper.
+            6. Use transfer_call ONLY when user clearly asks transfer (word must include "transfer" or "live agent").
+            7. Never trigger transfer from partial or unclear words.
+            8. If transfer intent is unclear, ask a clarification question instead of calling transfer_call.
+            9. Never call transfer_call on one-word or noisy utterances.
             """
         )
+
+
+def prewarm(proc: agents.JobProcess) -> None:
+    """Keep expensive audio components ready in warm worker processes."""
+    if not _use_realtime_audio():
+        proc.userdata["vad"] = _build_vad()
+
+
+async def _speak_scripted_line(
+    session: AgentSession,
+    *,
+    text: str,
+    realtime_audio: bool,
+) -> None:
+    """Play a scripted line using the active speech pipeline."""
+    if realtime_audio:
+        speech_handle = session.generate_reply(
+            instructions=(
+                f'Say exactly this line and nothing else: "{text}"'
+            ),
+            tool_choice="none",
+            allow_interruptions=True,
+            input_modality="text",
+        )
+        await speech_handle
+        return
+
+    await session.say(
+        text,
+        allow_interruptions=True,
+        add_to_chat_ctx=True,
+    )
 
 
 async def entrypoint(ctx: agents.JobContext):
@@ -531,34 +668,56 @@ async def entrypoint(ctx: agents.JobContext):
     fnc_ctx = TransferFunctions(ctx, phone_number)
     last_user_speech_at = time.time()
     reprompt_task: asyncio.Task | None = None
+    realtime_audio = _use_realtime_audio()
 
     # Initialize the Agent Session with plugins
+    if realtime_audio:
+        session = AgentSession(
+            llm=_build_realtime_llm(),
+            tools=fnc_ctx.flatten(),
+            turn_detection="realtime_llm",
+            allow_interruptions=True,
+            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.35),
+            user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
+        )
+    else:
+        vad = ctx.proc.userdata.get("vad") or _build_vad()
+        stt = _build_stt()
+        tts = _build_tts()
+        if hasattr(tts, "prewarm"):
+            try:
+                tts.prewarm()
+            except Exception as e:
+                logger.debug(f"TTS prewarm skipped: {e}")
 
-    session = AgentSession(
-        stt=_build_stt(),
-        vad=_build_vad(),
-        llm=openai.LLM(model=os.getenv("OPENAI_LLM_MODEL", "gpt-4o-mini")),
-        tts=_build_tts(),
-        tools=fnc_ctx.flatten(),
-        allow_interruptions=True,
-        min_interruption_duration=_get_float_env("SESSION_MIN_INTERRUPTION_DURATION", 0.15),
-        min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.25),
-        max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.90),
-        false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.70),
-        preemptive_generation=os.getenv("SESSION_PREEMPTIVE_GENERATION", "true").lower() == "true",
-    )
+        session = AgentSession(
+            stt=stt,
+            vad=vad,
+            llm=openai.LLM(model=os.getenv("OPENAI_LLM_MODEL", "gpt-4o-mini")),
+            tts=tts,
+            tools=fnc_ctx.flatten(),
+            allow_interruptions=True,
+            min_interruption_duration=_get_float_env("SESSION_MIN_INTERRUPTION_DURATION", 0.10),
+            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.14),
+            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.45),
+            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.35),
+            preemptive_generation=_get_bool_env("SESSION_PREEMPTIVE_GENERATION", True),
+        )
 
     # Start the session
     await session.start(
         room=ctx.room,
         agent=OutboundAssistant(),
-        room_input_options=RoomInputOptions(
-            noise_cancellation=(
-                noise_cancellation.BVCTelephony()
-                if os.getenv("ENABLE_NOISE_CANCELLATION", "false").lower() == "true"
-                else None
+        room_options=RoomOptions(
+            audio_input=AudioInputOptions(
+                noise_cancellation=(
+                    noise_cancellation.BVCTelephony()
+                    if os.getenv("ENABLE_NOISE_CANCELLATION", "true").lower() == "true"
+                    else None
+                ),
+                frame_size_ms=_get_int_env("ROOM_AUDIO_FRAME_SIZE_MS", 20),
             ),
-            close_on_disconnect=True, # Close room when agent disconnects
+            close_on_disconnect=True,
         ),
     )
 
@@ -605,17 +764,17 @@ async def entrypoint(ctx: agents.JobContext):
 
     async def _reprompt_if_no_speech() -> None:
         """If caller stays silent/no transcript arrives, send a short reprompt."""
-        delay = _get_float_env("NO_SPEECH_REPROMPT_SEC", 10.0)
+        delay = _get_float_env("NO_SPEECH_REPROMPT_SEC", 5.0)
         reprompt_text = _default_reprompt(_get_default_language())
         try:
             while True:
                 await asyncio.sleep(1.0)
                 if time.time() - last_user_speech_at < delay:
                     continue
-                await session.say(
-                    reprompt_text,
-                    allow_interruptions=True,
-                    add_to_chat_ctx=True,
+                await _speak_scripted_line(
+                    session,
+                    text=reprompt_text,
+                    realtime_audio=realtime_audio,
                 )
                 logger.info("No user speech detected; reprompt sent.")
                 break
@@ -658,10 +817,10 @@ async def entrypoint(ctx: agents.JobContext):
                 default_language,
             )
             try:
-                await session.say(
-                    first_message,
-                    allow_interruptions=True,
-                    add_to_chat_ctx=True,
+                await _speak_scripted_line(
+                    session,
+                    text=first_message,
+                    realtime_audio=realtime_audio,
                 )
                 logger.info("Initial greeting sent.")
                 reprompt_task = asyncio.create_task(_reprompt_if_no_speech())
@@ -683,6 +842,8 @@ if __name__ == "__main__":
     agents.cli.run_app(
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
+            prewarm_fnc=prewarm,
             agent_name="outbound-caller", 
+            num_idle_processes=max(0, _get_int_env("AGENT_NUM_IDLE_PROCESSES", 1)),
         )
     )

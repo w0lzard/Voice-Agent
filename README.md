@@ -1,34 +1,47 @@
-# LiveKit + Vobiz Voice Agent
+# Voice Agent
 
-This repository contains a standalone phone agent built on LiveKit SIP, Vobiz telephony, and OpenAI speech models.
+Standalone phone agent built on LiveKit SIP, Vobiz telephony, and OpenAI speech models.
 
-The root-level flow is the one described here:
+This root-level setup is the fastest way to run the agent in this repository. It supports:
 
-- `agent.py` handles outbound calls
-- `make_call.py` dispatches outbound jobs
-- `agent_inbound.py` handles inbound calls
-- `setup_trunk.py` syncs an existing LiveKit outbound trunk from `.env`
-- `setup_inbound.py` creates the LiveKit inbound trunk and dispatch rule
+- outbound PSTN calls through Vobiz
+- inbound PSTN calls through LiveKit dispatch rules
+- OpenAI STT, LLM, and TTS conversation flow
+- Hindi-first or English-first behavior
+- transfer to a default or spoken destination number
+- calling any valid target number from the CLI
 
-The repo also includes a larger backend/frontend platform under `backend/` and `frontend/`, but you do not need those services to run the standalone agent described in this README.
+> This repository also contains a larger backend/frontend platform under `backend/` and `frontend/`. You do not need that stack to use the standalone flow documented here.
 
-## What This Agent Does
+## At A Glance
 
-- Places outbound PSTN calls through Vobiz
-- Handles inbound PSTN calls through LiveKit dispatch rules
-- Uses OpenAI STT, LLM, and TTS for conversation
-- Supports Hindi-first or English-first behavior
-- Auto-syncs the LiveKit outbound trunk from `.env` before dialing
-- Supports call transfer to a default or spoken destination number
-- Lets you call any target number from the CLI
+| File | Purpose |
+| --- | --- |
+| `agent.py` | Standalone outbound worker |
+| `make_call.py` | Dispatch outbound calls from the CLI |
+| `agent_inbound.py` | Standalone inbound worker |
+| `setup_trunk.py` | Sync an existing LiveKit outbound trunk from `.env` |
+| `setup_inbound.py` | Create the LiveKit inbound trunk and dispatch rule |
+| `.env.example` | Environment template |
+| `transfer_call.md` | Transfer-specific notes |
 
-## Call Flow
+## Flow
+
+```mermaid
+flowchart LR
+    CLI[make_call.py] --> LK[LiveKit Dispatch]
+    LK --> AGENT[agent.py]
+    AGENT --> SIP[LiveKit SIP]
+    SIP --> VOBIZ[Vobiz]
+    VOBIZ --> PSTN[Phone Network]
+    PSTN --> USER[Caller]
+```
 
 Outbound flow:
 
-1. `make_call.py` creates a LiveKit dispatch with the target phone number in metadata.
+1. `make_call.py` dispatches a LiveKit job with the target phone number.
 2. `agent.py` joins the room as `outbound-caller`.
-3. The agent resolves or updates the outbound SIP trunk using the Vobiz values in `.env`.
+3. The worker resolves or updates the outbound SIP trunk using `.env`.
 4. LiveKit dials the destination over Vobiz.
 5. OpenAI STT -> LLM -> TTS drives the conversation.
 
@@ -38,20 +51,6 @@ Inbound flow:
 2. LiveKit matches the inbound trunk and dispatch rule.
 3. `agent_inbound.py` joins the room as `voice-assistant`.
 4. The agent greets the caller and starts the conversation.
-
-## Repository Layout
-
-```text
-agent.py           Standalone outbound worker
-agent_inbound.py   Standalone inbound worker
-make_call.py       CLI dispatcher for outbound calls
-setup_trunk.py     Sync an existing LiveKit outbound trunk from .env
-setup_inbound.py   Create inbound trunk + dispatch rule in LiveKit
-.env.example       Environment template
-transfer_call.md   Transfer-specific notes
-backend/           Larger microservices platform
-frontend/          Dashboard frontend
-```
 
 ## Requirements
 
@@ -69,40 +68,155 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Configure `.env`
+## Quick Start
 
-Copy the template:
+### 1. Create `.env`
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
+Minimum outbound values:
+
+```env
+LIVEKIT_URL=wss://your-project.livekit.cloud
+LIVEKIT_API_KEY=your_livekit_api_key
+LIVEKIT_API_SECRET=your_livekit_api_secret
+
+VOBIZ_SIP_DOMAIN=your-live-outbound-trunk.sip.vobiz.ai
+VOBIZ_AUTH_ID=your_vobiz_auth_id
+VOBIZ_AUTH_TOKEN=your_vobiz_auth_token
+VOBIZ_CALLER_ID=+91XXXXXXXXXX
+
+OPENAI_API_KEY=sk-...
+AGENT_DEFAULT_LANGUAGE=hi
+OPENAI_STT_LANGUAGE=hi
+```
+
+### 2. Prepare the outbound trunk
+
+If you already know your LiveKit trunk ID:
+
+```env
+OUTBOUND_TRUNK_ID=ST_xxxxxxxxxxxxx
+```
+
+Then run:
+
+```powershell
+python setup_trunk.py
+```
+
+If you leave `OUTBOUND_TRUNK_ID` blank, `agent.py` will try to:
+
+1. use the explicit trunk ID if present
+2. match by trunk name
+3. match by caller number
+4. create or sync a trunk from `.env` if needed
+
+### 3. Start the outbound worker
+
+```powershell
+python agent.py start
+```
+
+For local debugging:
+
+```powershell
+python agent.py dev
+```
+
+### 4. Place a call
+
+Single number:
+
+```powershell
+python make_call.py +919876543210
+```
+
+Alternative form:
+
+```powershell
+python make_call.py --to +14155550123
+```
+
+Multiple numbers:
+
+```powershell
+python make_call.py --to +919876543210,+14155550123
+```
+
+Or:
+
+```powershell
+python make_call.py --to +919876543210 --to +14155550123
+```
+
+Interactive prompt:
+
+```powershell
+python make_call.py
+```
+
+`DEFAULT_OUTBOUND_TARGET` is only a fallback. The CLI can call any valid E.164 number you pass in.
+
+## Inbound Setup
+
+### 1. Set the inbound number
+
+```env
+VOBIZ_INBOUND_NUMBER=+91XXXXXXXXXX
+```
+
+### 2. Create the LiveKit inbound trunk and dispatch rule
+
+```powershell
+python setup_inbound.py
+```
+
+The script prints the LiveKit SIP endpoint that must be configured in Vobiz as the Primary URI.
+
+### 3. Start the inbound worker
+
+```powershell
+python agent_inbound.py start
+```
+
+### 4. Vobiz-side inbound checklist
+
+- inbound trunk exists and is active
+- Primary URI points to `<your-livekit-project>.sip.livekit.cloud`
+- inbound number is linked to the app or trunk
+- `agent_inbound.py` is running
+
+## Environment Guide
+
 ### Required for the standalone outbound agent
 
 | Variable | Required | Notes |
 | --- | --- | --- |
-| `LIVEKIT_URL` | Yes | Your LiveKit WebSocket URL |
+| `LIVEKIT_URL` | Yes | LiveKit WebSocket URL |
 | `LIVEKIT_API_KEY` | Yes | LiveKit API key |
 | `LIVEKIT_API_SECRET` | Yes | LiveKit API secret |
-| `VOBIZ_SIP_DOMAIN` | Yes | Your live Vobiz outbound trunk domain, for example `xxxx.sip.vobiz.ai` |
+| `VOBIZ_SIP_DOMAIN` | Yes | Actual live Vobiz outbound trunk domain |
 | `VOBIZ_AUTH_ID` or `VOBIZ_USERNAME` | Yes | Vobiz SIP username |
 | `VOBIZ_AUTH_TOKEN` or `VOBIZ_PASSWORD` | Yes | Vobiz SIP password/token |
-| `VOBIZ_CALLER_ID` or `VOBIZ_OUTBOUND_NUMBER` | Yes | Caller ID used by the outbound trunk |
-| `OPENAI_API_KEY` | Yes | OpenAI API key for STT/LLM/TTS |
+| `VOBIZ_CALLER_ID` or `VOBIZ_OUTBOUND_NUMBER` | Yes | Caller ID for the outbound trunk |
+| `OPENAI_API_KEY` | Yes | OpenAI key for STT, LLM, and TTS |
 
 ### Important optional values
 
 | Variable | Purpose |
 | --- | --- |
-| `OUTBOUND_TRUNK_ID` | Explicit LiveKit trunk ID (`ST_...`) if you want deterministic trunk selection |
-| `VOBIZ_TRUNK_NAME` | Friendly trunk name used during auto-discovery/sync |
-| `DEFAULT_OUTBOUND_TARGET` | Fallback number if you do not pass or type one when running `make_call.py` |
-| `DEFAULT_TRANSFER_NUMBER` | Number used when the caller asks for transfer |
+| `OUTBOUND_TRUNK_ID` | Explicit LiveKit trunk ID (`ST_...`) |
+| `VOBIZ_TRUNK_NAME` | Friendly trunk name used for lookup and sync |
+| `DEFAULT_OUTBOUND_TARGET` | Fallback target used only if you do not pass a number |
+| `DEFAULT_TRANSFER_NUMBER` | Transfer destination used when the caller asks for transfer |
 | `AGENT_PERSONA_NAME` | Spoken persona name |
 | `AGENT_COMPANY_NAME` | Spoken company name |
 | `AGENT_DEFAULT_LANGUAGE` | `hi` or `en` |
-| `OUTBOUND_FIRST_MESSAGE` | First message spoken after the callee answers |
-| `OPENAI_STT_LANGUAGE` | Strongly recommended to set to `hi` for Hindi-first usage or `en` for English-first usage |
+| `OUTBOUND_FIRST_MESSAGE` | First message spoken after answer |
+| `OPENAI_STT_LANGUAGE` | Recommended: `hi` for Hindi-first, `en` for English-first |
 
 ### Backend-only values
 
@@ -121,127 +235,54 @@ If you are only using the standalone root scripts, these can stay unset or place
 - `VOBIZ_SIP_DOMAIN` must be your actual outbound trunk domain from Vobiz.
 - Do not put the Vobiz application SIP URI there.
 - Do not put the LiveKit SIP URI there.
-- If your calls fail with SIP `500` or auth retry issues, the most common cause is a wrong trunk domain or stale trunk credentials.
-
-## Outbound Quick Start
-
-### 1. Prepare or sync the outbound trunk
-
-You have two options:
-
-Option A: Explicit trunk ID
-
-1. Set `OUTBOUND_TRUNK_ID=ST_...` in `.env`
-2. Run:
-
-```powershell
-python setup_trunk.py
-```
-
-Option B: Let the worker auto-resolve the trunk
-
-- Leave `OUTBOUND_TRUNK_ID` blank
-- Make sure `VOBIZ_SIP_DOMAIN`, SIP auth, and caller ID are correct
-- `agent.py` will try to:
-  1. use the explicit trunk ID if present
-  2. match by trunk name
-  3. match by caller number
-  4. create/sync a trunk from `.env` if needed
-
-### 2. Start the outbound worker
-
-```powershell
-python agent.py start
-```
-
-For local debugging you can also use:
-
-```powershell
-python agent.py dev
-```
-
-### 3. Dispatch a call
-
-Call a single number:
-
-```powershell
-python make_call.py +919876543210
-```
-
-Or:
-
-```powershell
-python make_call.py --to +14155550123
-```
-
-Call multiple numbers:
-
-```powershell
-python make_call.py --to +919876543210,+14155550123
-```
-
-Or repeat the flag:
-
-```powershell
-python make_call.py --to +919876543210 --to +14155550123
-```
-
-Prompt for a number interactively:
-
-```powershell
-python make_call.py
-```
-
-`DEFAULT_OUTBOUND_TARGET` is only a fallback. The CLI can now call any valid E.164 number you pass in.
-
-## Inbound Quick Start
-
-The inbound worker is separate from the outbound worker.
-
-### 1. Set the inbound number
-
-In `.env`:
-
-```env
-VOBIZ_INBOUND_NUMBER=+91XXXXXXXXXX
-```
-
-### 2. Create the LiveKit inbound trunk and dispatch rule
-
-```powershell
-python setup_inbound.py
-```
-
-The script prints the LiveKit SIP endpoint you must configure in Vobiz as the Primary URI.
-
-### 3. Start the inbound worker
-
-```powershell
-python agent_inbound.py start
-```
-
-### 4. Vobiz-side inbound checklist
-
-- Inbound trunk exists and is active
-- Primary URI points to `<your-livekit-project>.sip.livekit.cloud`
-- The inbound number is linked to the app/trunk
-- `agent_inbound.py` is running
+- If calls fail with SIP `500` or auth retry issues, the most common cause is a wrong trunk domain or stale credentials on the LiveKit side.
 
 ## Transfer Behavior
 
-The outbound agent supports transfer through SIP REFER.
+The outbound agent supports SIP REFER transfer.
 
-Default transfer phrases:
+Default phrases:
 
 - `transfer me`
 - `transfer me to a live agent`
 
-The agent requires confirmation by default. Important settings:
+Important settings:
 
-- `TRANSFER_REQUIRE_CONFIRMATION=true`
-- `DEFAULT_TRANSFER_NUMBER=+91...`
+```env
+TRANSFER_REQUIRE_CONFIRMATION=true
+DEFAULT_TRANSFER_NUMBER=+91XXXXXXXXXX
+```
 
-You can also ask for a custom number in the conversation. See `transfer_call.md` for more detail.
+The caller can also request a custom destination number during the call.
+
+See `transfer_call.md` for transfer-specific notes.
+
+## Useful Commands
+
+```powershell
+python setup_trunk.py
+python agent.py start
+python make_call.py +919876543210
+python make_call.py --to +919876543210 --to +14155550123
+python setup_inbound.py
+python agent_inbound.py start
+```
+
+## Useful Logs
+
+When the system is healthy, you should see logs like:
+
+- `Synced existing outbound trunk from env: ST_...`
+- `Call answered! Agent is now listening.`
+- `user_input_transcribed final=True language=...`
+- `conversation_item_added role=assistant ...`
+
+Those mean:
+
+- the worker connected to LiveKit
+- the SIP leg connected
+- STT heard the caller
+- the assistant generated a reply
 
 ## Troubleshooting
 
@@ -249,53 +290,46 @@ You can also ask for a custom number in the conversation. See `transfer_call.md`
 | --- | --- | --- |
 | SIP `500` or auth retry error | Wrong trunk domain or stale Vobiz credentials on the LiveKit trunk | Verify `VOBIZ_SIP_DOMAIN`, `VOBIZ_AUTH_ID`, `VOBIZ_AUTH_TOKEN`, caller ID, then run `python setup_trunk.py` |
 | Call rings but never connects | Provider-side routing issue | Check Vobiz routing, number status, and whether your account can call that destination |
-| Call connects but the agent says nothing | OpenAI key missing or worker not running correctly | Verify `OPENAI_API_KEY`, run `python agent.py start`, inspect terminal logs |
-| Call connects but the agent does not respond after you speak | STT language mismatch or the old worker is still running | Set `OPENAI_STT_LANGUAGE=hi` or `en`, restart the worker, look for `user_input_transcribed` in logs |
-| Wrong number is being called | Fallback env target is being used | Pass a number on the CLI or clear `DEFAULT_OUTBOUND_TARGET` |
+| Call connects but the agent says nothing | OpenAI key missing or worker not running correctly | Verify `OPENAI_API_KEY`, run `python agent.py start`, inspect logs |
+| Call connects but the agent does not respond after you speak | STT language mismatch or stale worker process | Set `OPENAI_STT_LANGUAGE=hi` or `en`, restart the worker, confirm `user_input_transcribed` appears in logs |
+| Wrong number is being called | Fallback env target is being used | Pass a target on the CLI or clear `DEFAULT_OUTBOUND_TARGET` |
 | Inbound call does not reach the agent | Inbound trunk or Primary URI is incomplete | Run `python setup_inbound.py`, set the printed SIP endpoint in Vobiz, start `agent_inbound.py` |
-| Transfer fails | Missing transfer number or provider restrictions | Verify `DEFAULT_TRANSFER_NUMBER`, `VOBIZ_SIP_DOMAIN`, and provider SIP REFER support |
-| Some destinations fail on a trial account | Vobiz trial/shared-number restrictions | Test with allowed numbers or upgrade to a dedicated number |
+| Transfer fails | Missing transfer number or provider restriction | Verify `DEFAULT_TRANSFER_NUMBER`, `VOBIZ_SIP_DOMAIN`, and provider SIP REFER support |
+| Some destinations fail on a trial account | Vobiz trial or shared-number restrictions | Test with allowed numbers or upgrade to a dedicated number |
 
-## Useful Log Lines
+## Project Structure
 
-When things are working, you should see logs like:
-
-- `Synced existing outbound trunk from env: ST_...`
-- `Call answered! Agent is now listening.`
-- `user_input_transcribed final=True language=...`
-- `conversation_item_added role=assistant ...`
-
-Those lines mean:
-
-- the worker connected to LiveKit
-- the SIP leg was established
-- STT heard the caller
-- the assistant produced a reply
-
-## Commands Reference
-
-```powershell
-python setup_trunk.py
-python agent.py start
-python make_call.py +919876543210
-python make_call.py --to +919876543210 --to +14155550123
-python setup_inbound.py
-python agent_inbound.py start
+```text
+.
+|-- agent.py
+|-- agent_inbound.py
+|-- make_call.py
+|-- setup_trunk.py
+|-- setup_inbound.py
+|-- transfer_call.md
+|-- backend/
+|-- frontend/
+|-- docs/
+`-- scripts/
 ```
 
-## Related Documents
+## Related Documentation
 
-- `transfer_call.md` - transfer-specific setup and behavior
-- `backend/README.md` - larger microservices platform
+- `transfer_call.md` for transfer-specific behavior
+- `backend/README.md` for the larger microservices platform
 
-## Current Behavior Summary
+## Current Root-Level Behavior
 
-The standalone outbound flow in this repo currently:
+The standalone root flow in this repository currently:
 
 - resolves and syncs the Vobiz outbound trunk from `.env`
 - supports calling arbitrary numbers from the CLI
 - speaks first after answer
 - captures caller speech through `AgentSession` speech events
-- handles Hindi-first and English-switch conversations
+- handles Hindi-first conversations and English switching
 
-If you want this README extended with deployment steps, Docker usage, or a dedicated inbound-only section, that can be added next.
+If you want, this README can also be split into:
+
+- a short landing README
+- a dedicated outbound-only guide
+- a separate inbound deployment guide
