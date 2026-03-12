@@ -13,6 +13,7 @@ from livekit.agents.voice.room_io import RoomOptions, AudioInputOptions
 from livekit.plugins import (
     openai,
     deepgram,
+    google,
     noise_cancellation,
     silero,
 )
@@ -101,6 +102,10 @@ def _get_default_language() -> str:
 
 def _use_realtime_audio() -> bool:
     return _get_bool_env("OPENAI_REALTIME_AUDIO", True)
+
+
+def _get_realtime_provider() -> str:
+    return os.getenv("REALTIME_PROVIDER", "openai").strip().lower() or "openai"
 
 
 def _repair_mojibake(value: str | None) -> str | None:
@@ -346,7 +351,23 @@ def _build_stt():
 
 
 def _build_realtime_llm():
-    """Configure OpenAI realtime audio for lower-latency voice output."""
+    """Configure realtime audio provider for lower-latency voice output."""
+    if _get_realtime_provider() == "google":
+        model = os.getenv("GOOGLE_REALTIME_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
+        voice = os.getenv("GOOGLE_REALTIME_VOICE", "Puck")
+        logger.info(
+            "Using Gemini Live audio (model=%s voice=%s language=%s)",
+            model,
+            voice,
+            _get_default_language(),
+        )
+        return google.realtime.RealtimeModel(
+            model=model,
+            voice=voice,
+            temperature=_get_float_env("OPENAI_REALTIME_TEMPERATURE", 0.8),
+            instructions=_build_agent_instructions(),
+        )
+
     model = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime")
     voice = os.getenv("OPENAI_REALTIME_VOICE", "marin")
     speed = _get_float_env("OPENAI_REALTIME_SPEED", 1.0)
@@ -392,6 +413,38 @@ def _build_vad():
         sample_rate=16000,
     )
 
+
+
+def _build_agent_instructions() -> str:
+    agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
+    company = os.getenv("AGENT_COMPANY_NAME", "real estate company")
+    default_language = os.getenv("AGENT_DEFAULT_LANGUAGE", "hi").strip().lower()
+    voice_style_hint = os.getenv("VOICE_STYLE_HINT", "").strip()
+    language_instruction = (
+        "Primary language is Hindi. Reply in simple Hindi by default. "
+        "If the caller speaks English, switch to English. If mixed, use Hinglish."
+        if default_language == "hi"
+        else "Primary language is English. If the caller speaks Hindi, switch to Hindi."
+    )
+    return f"""
+            You are {agent_name}, a helpful and professional voice agent from {company}.
+            {language_instruction}
+            {"Voice style: " + voice_style_hint if voice_style_hint else ""}
+
+            Key behaviors:
+            1. Your first spoken turn after the call is answered must be a brief intro only.
+            2. After the caller acknowledges, continue the conversation naturally.
+            3. Be concise and respectful of the user's time.
+            3a. Default to one short sentence.
+            3b. Ask only one question at a time.
+            3c. Keep every reply short unless the caller asks for detail.
+            4. Keep conversation focused on real-estate context (property, site visit, budget, location, timeline).
+            5. After the intro, ask whether it is a good time to talk before going deeper.
+            6. Use transfer_call ONLY when user clearly asks transfer (word must include "transfer" or "live agent").
+            7. Never trigger transfer from partial or unclear words.
+            8. If transfer intent is unclear, ask a clarification question instead of calling transfer_call.
+            9. Never call transfer_call on one-word or noisy utterances.
+            """
 
 
 class TransferFunctions(llm.ToolContext):
@@ -567,35 +620,7 @@ class OutboundAssistant(Agent):
     Attempts to be helpful and concise.
     """
     def __init__(self) -> None:
-        agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
-        company = os.getenv("AGENT_COMPANY_NAME", "real estate company")
-        default_language = os.getenv("AGENT_DEFAULT_LANGUAGE", "hi").strip().lower()
-        language_instruction = (
-            "Primary language is Hindi. Reply in simple Hindi by default. "
-            "If the caller speaks English, switch to English. If mixed, use Hinglish."
-            if default_language == "hi"
-            else "Primary language is English. If the caller speaks Hindi, switch to Hindi."
-        )
-        super().__init__(
-            instructions=f"""
-            You are {agent_name}, a helpful and professional voice agent from {company}.
-            {language_instruction}
-            
-            Key behaviors:
-            1. Your first spoken turn after the call is answered must be a brief intro only.
-            2. After the caller acknowledges, continue the conversation naturally.
-            3. Be concise and respectful of the user's time.
-            3a. Default to one short sentence.
-            3b. Ask only one question at a time.
-            3c. Keep every reply short unless the caller asks for detail.
-            4. Keep conversation focused on real-estate context (property, site visit, budget, location, timeline).
-            5. After the intro, ask whether it is a good time to talk before going deeper.
-            6. Use transfer_call ONLY when user clearly asks transfer (word must include "transfer" or "live agent").
-            7. Never trigger transfer from partial or unclear words.
-            8. If transfer intent is unclear, ask a clarification question instead of calling transfer_call.
-            9. Never call transfer_call on one-word or noisy utterances.
-            """
-        )
+        super().__init__(instructions=_build_agent_instructions())
 
 
 def prewarm(proc: agents.JobProcess) -> None:

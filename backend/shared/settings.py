@@ -5,6 +5,27 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
+
+def _normalize_domain(value: str | None) -> str | None:
+    if not value:
+        return None
+    domain = value.strip()
+    if domain.startswith("sip:"):
+        domain = domain[4:]
+    if "@" in domain:
+        domain = domain.split("@", 1)[1]
+    return domain.strip() or None
+
+
+def _normalize_phone(value: str | None) -> str | None:
+    if not value:
+        return None
+    phone = value.strip().replace(" ", "").replace("-", "")
+    if not phone:
+        return None
+    return phone if phone.startswith("+") else f"+{phone}"
+
+
 def _load_environment() -> None:
     """Load environment variables from common project locations."""
     backend_dir = Path(__file__).resolve().parents[1]
@@ -56,7 +77,12 @@ class Config:
     AWS_REGION = os.getenv("AWS_REGION", "ap-south-1")
     
     # Vobiz SIP (default, can be overridden by SIP configs)
-    OUTBOUND_TRUNK_ID = os.getenv("OUTBOUND_TRUNK_ID", "ST_EobjZFLK23yB")
+    OUTBOUND_TRUNK_ID = os.getenv("OUTBOUND_TRUNK_ID", "").strip() or None
+    VOBIZ_SIP_DOMAIN = _normalize_domain(os.getenv("VOBIZ_SIP_DOMAIN"))
+    VOBIZ_AUTH_ID = (os.getenv("VOBIZ_AUTH_ID") or os.getenv("VOBIZ_USERNAME") or "").strip() or None
+    VOBIZ_AUTH_TOKEN = (os.getenv("VOBIZ_AUTH_TOKEN") or os.getenv("VOBIZ_PASSWORD") or "").strip() or None
+    VOBIZ_CALLER_ID = _normalize_phone(os.getenv("VOBIZ_CALLER_ID") or os.getenv("VOBIZ_OUTBOUND_NUMBER"))
+    VOBIZ_TRUNK_NAME = (os.getenv("VOBIZ_TRUNK_NAME") or "vobiz-outbound-auto").strip() or "vobiz-outbound-auto"
     
     # Server
     API_HOST = os.getenv("API_HOST", "0.0.0.0")

@@ -1,8 +1,9 @@
-livekit-agents
-livekit-plugins-openai
-livekit-plugins-deepgram
+livekit-agents==1.4.4
+livekit-plugins-openai==1.4.4
+livekit-plugins-google==1.4.4
+livekit-plugins-deepgram==1.4.4
 livekit-plugins-noise-cancellation
-livekit-plugins-silero
-livekit-plugins-cartesia
+livekit-plugins-silero==1.4.4
+livekit-plugins-cartesia==1.4.4
 aiohttp
 python-dotenv

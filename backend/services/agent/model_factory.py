@@ -9,6 +9,12 @@ from openai.types.beta.realtime.session import TurnDetection
 
 logger = logging.getLogger("model-factory")
 
+deepgram = None
+elevenlabs = None
+anthropic = None
+cartesia = None
+google = None
+
 # Check which plugins are available
 AVAILABLE_PLUGINS = {
     "openai": True,  # Always available (core)
@@ -105,7 +111,6 @@ def get_llm(voice_config: dict) -> Any:
         return anthropic.LLM(model=model)
     
     elif provider == "google" and AVAILABLE_PLUGINS["google"]:
-        from livekit.plugins import google
         return google.LLM(model=model)
     
     elif provider == "groq" and AVAILABLE_PLUGINS["groq"]:
@@ -185,8 +190,7 @@ def get_realtime_model(voice_config: dict) -> Any:
         )
     
     elif provider == "google" and AVAILABLE_PLUGINS["google"]:
-        from livekit.plugins import google
-        return google.RealtimeModel(
+        return google.realtime.RealtimeModel(
             model=model,
             voice=voice_id,
         )

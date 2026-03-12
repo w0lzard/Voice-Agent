@@ -37,6 +37,104 @@ from livekit.agents import function_tool, RunContext
 
 # Import config
 from shared.settings import config
+from services.agent.model_factory import get_stt, get_llm, get_tts, get_realtime_model
+
+
+def _is_trunk_id(value: str | None) -> bool:
+    return bool(value and value.startswith("ST_"))
+
+
+async def _ensure_outbound_trunk(ctx: agents.JobContext) -> str | None:
+    """Find or create an outbound trunk using env-backed VoBiz credentials."""
+    sip_domain = config.VOBIZ_SIP_DOMAIN
+    auth_id = config.VOBIZ_AUTH_ID
+    auth_token = config.VOBIZ_AUTH_TOKEN
+    caller_id = config.VOBIZ_CALLER_ID
+    if not all([sip_domain, auth_id, auth_token, caller_id]):
+        logger.error(
+            "Cannot create outbound trunk. Missing one of: "
+            "VOBIZ_SIP_DOMAIN, VOBIZ_AUTH_ID/VOBIZ_USERNAME, "
+            "VOBIZ_AUTH_TOKEN/VOBIZ_PASSWORD, VOBIZ_CALLER_ID/VOBIZ_OUTBOUND_NUMBER."
+        )
+        return None
+
+    trunk_name = config.VOBIZ_TRUNK_NAME
+
+    try:
+        trunks = await ctx.api.sip.list_outbound_trunk(api.ListSIPOutboundTrunkRequest())
+        for trunk in trunks.items:
+            matches_name = trunk.name == trunk_name
+            matches_address = getattr(trunk, "address", "") == sip_domain
+            matches_number = bool(getattr(trunk, "numbers", None) and caller_id in trunk.numbers)
+            if matches_name or (matches_address and matches_number):
+                try:
+                    updated = await ctx.api.sip.update_outbound_trunk_fields(
+                        trunk.sip_trunk_id,
+                        name=trunk_name,
+                        address=sip_domain,
+                        numbers=[caller_id],
+                        auth_username=auth_id,
+                        auth_password=auth_token,
+                    )
+                    logger.info(f"Synced existing outbound trunk from env: {trunk.sip_trunk_id}")
+                    return updated.sip_trunk_id
+                except Exception as exc:
+                    logger.warning(f"Could not sync existing outbound trunk {trunk.sip_trunk_id}: {exc}")
+                    logger.info(f"Using existing outbound trunk without sync: {trunk.sip_trunk_id}")
+                    return trunk.sip_trunk_id
+    except Exception as exc:
+        logger.warning(f"Could not list outbound trunks before create: {exc}")
+
+    try:
+        created = await ctx.api.sip.create_sip_outbound_trunk(
+            api.CreateSIPOutboundTrunkRequest(
+                trunk=api.SIPOutboundTrunkInfo(
+                    name=trunk_name,
+                    address=sip_domain,
+                    numbers=[caller_id],
+                    auth_username=auth_id,
+                    auth_password=auth_token,
+                )
+            )
+        )
+        logger.info(f"Created outbound trunk from env: {created.sip_trunk_id}")
+        return created.sip_trunk_id
+    except Exception as exc:
+        logger.error(f"Failed to create outbound trunk automatically: {exc}")
+        return None
+
+
+async def _resolve_outbound_trunk_id(ctx: agents.JobContext, configured: str | None) -> str | None:
+    """Resolve outbound trunk ID from explicit ID, trunk name, caller number, or env-backed sync."""
+    configured = (configured or "").strip() or None
+    if _is_trunk_id(configured):
+        return configured
+
+    trunks = await ctx.api.sip.list_outbound_trunk(api.ListSIPOutboundTrunkRequest())
+
+    if configured:
+        for trunk in trunks.items:
+            if trunk.sip_trunk_id == configured or trunk.name == configured:
+                logger.info(f"Resolved outbound trunk '{configured}' -> {trunk.sip_trunk_id}")
+                return trunk.sip_trunk_id
+
+    caller_number = config.VOBIZ_CALLER_ID
+    if caller_number:
+        for trunk in trunks.items:
+            if caller_number in getattr(trunk, "numbers", []):
+                logger.info(f"Resolved outbound trunk by caller number {caller_number} -> {trunk.sip_trunk_id}")
+                return trunk.sip_trunk_id
+
+    auto_created = await _ensure_outbound_trunk(ctx)
+    if auto_created:
+        return auto_created
+
+    if trunks.items:
+        fallback = trunks.items[0].sip_trunk_id
+        logger.warning(f"Falling back to first outbound trunk: {fallback}")
+        return fallback
+
+    return None
 
 
 class OutboundAssistant(Agent):
@@ -252,10 +350,7 @@ async def get_inbound_assistant_config(room_name: str) -> dict:
 async def entrypoint(ctx: agents.JobContext):
     """Main entrypoint for the agent."""
     logger.info(f"Connecting to room: {ctx.room.name}")
-    
-    # Import model factory
-    from services.agent.model_factory import get_stt, get_llm, get_tts, get_realtime_model
-    
+
     # Parse metadata
     phone_number = None
     call_id = None
@@ -269,11 +364,11 @@ async def entrypoint(ctx: agents.JobContext):
     # Voice configuration (user-selectable models)
     voice_config = {
         "mode": "realtime",  # realtime or pipeline
-        "voice_id": config.OPENAI_REALTIME_VOICE,
+        "voice_id": os.getenv("GOOGLE_REALTIME_VOICE", "Puck") if os.getenv("REALTIME_PROVIDER", "openai").strip().lower() == "google" else config.OPENAI_REALTIME_VOICE,
         "temperature": 0.8,
         # Realtime mode
-        "realtime_provider": "openai",
-        "realtime_model": "gpt-realtime-mini",
+        "realtime_provider": os.getenv("REALTIME_PROVIDER", "openai").strip().lower(),
+        "realtime_model": os.getenv("GOOGLE_REALTIME_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025") if os.getenv("REALTIME_PROVIDER", "openai").strip().lower() == "google" else os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-mini"),
         # Pipeline mode (STT → LLM → TTS)
         "stt_provider": "deepgram",
         "stt_model": "nova-2",
@@ -523,6 +618,14 @@ async def entrypoint(ctx: agents.JobContext):
     elif phone_number:
         logger.info(f"Initiating outbound SIP call to {phone_number}...")
         try:
+            sip_trunk_id = await _resolve_outbound_trunk_id(ctx, sip_trunk_id)
+            if not sip_trunk_id:
+                raise RuntimeError(
+                    "No valid outbound trunk ID found. Set OUTBOUND_TRUNK_ID=ST_xxx or "
+                    "provide VOBIZ_SIP_DOMAIN, VOBIZ_AUTH_ID/VOBIZ_USERNAME, "
+                    "VOBIZ_AUTH_TOKEN/VOBIZ_PASSWORD, VOBIZ_CALLER_ID/VOBIZ_OUTBOUND_NUMBER."
+                )
+
             await ctx.api.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
                     room_name=ctx.room.name,
