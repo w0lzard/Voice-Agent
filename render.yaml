@@ -170,12 +170,13 @@ services:
 
   # =============================================================
   # LIVEKIT AGENT WORKER  (background, no HTTP port)
+  # Uses root agent.py — native Python, no Docker required
   # =============================================================
   - type: worker
     name: vobiz-agent
-    runtime: docker
-    dockerfilePath: ./backend/services/agent/Dockerfile
-    dockerContext: ./backend
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python agent.py start
     plan: starter       # must NOT sleep — handles live calls
     envVars:
       - key: MONGODB_URI
@@ -229,9 +230,6 @@ services:
       - key: DEFAULT_TRANSFER_NUMBER
         sync: false
 
-      # ---- Internal service callback ----
-      - key: ANALYTICS_SERVICE_URL
-        value: http://vobiz-analytics:8001
       - key: INTERNAL_API_KEY
         sync: false
 
@@ -244,7 +242,7 @@ services:
     dockerfilePath: ./backend/services/orchestration/Dockerfile
     dockerContext: ./backend
     plan: starter
-    startCommand: celery -A services.orchestration.tasks_queue.celery_app worker --loglevel=info --concurrency=2
+    dockerCommand: celery -A services.orchestration.tasks_queue.celery_app worker --loglevel=info --concurrency=2
     envVars:
       - key: MONGODB_URI
         sync: false
