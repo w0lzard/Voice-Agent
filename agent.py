@@ -395,7 +395,7 @@ def _build_realtime_llm():
             model=model,
             voice=voice,
             language=_get_realtime_language_code(),
-            temperature=_get_float_env("OPENAI_REALTIME_TEMPERATURE", 0.8),
+            temperature=_get_float_env("OPENAI_REALTIME_TEMPERATURE", 0.7),
             instructions=_build_agent_instructions(),
         )
 
@@ -444,38 +444,6 @@ def _build_vad():
         sample_rate=16000,
     )
 
-
-
-def _build_agent_instructions() -> str:
-    agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
-    company = os.getenv("AGENT_COMPANY_NAME", "real estate company")
-    default_language = os.getenv("AGENT_DEFAULT_LANGUAGE", "hi").strip().lower()
-    voice_style_hint = os.getenv("VOICE_STYLE_HINT", "").strip()
-    language_instruction = (
-        "Primary language is Hindi. Reply in simple Hindi by default. "
-        "If the caller speaks English, switch to English. If mixed, use Hinglish."
-        if default_language == "hi"
-        else "Primary language is English. If the caller speaks Hindi, switch to Hindi."
-    )
-    return f"""
-            You are {agent_name}, a helpful and professional voice agent from {company}.
-            {language_instruction}
-            {"Voice style: " + voice_style_hint if voice_style_hint else ""}
-
-            Key behaviors:
-            1. Your first spoken turn after the call is answered must be a brief intro only.
-            2. After the caller acknowledges, continue the conversation naturally.
-            3. Be concise and respectful of the user's time.
-            3a. Default to one short sentence.
-            3b. Ask only one question at a time.
-            3c. Keep every reply short unless the caller asks for detail.
-            4. Keep conversation focused on real-estate context (property, site visit, budget, location, timeline).
-            5. After the intro, ask whether it is a good time to talk before going deeper.
-            6. Use transfer_call ONLY when user clearly asks transfer (word must include "transfer" or "live agent").
-            7. Never trigger transfer from partial or unclear words.
-            8. If transfer intent is unclear, ask a clarification question instead of calling transfer_call.
-            9. Never call transfer_call on one-word or noisy utterances.
-            """
 
 
 class TransferFunctions(llm.ToolContext):
@@ -648,30 +616,41 @@ def _build_agent_instructions() -> str:
     agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
     company = os.getenv("AGENT_COMPANY_NAME", "real estate company")
     default_language = os.getenv("AGENT_DEFAULT_LANGUAGE", "hi").strip().lower()
-    language_instruction = (
-        "Primary language is Hindi. Reply in simple Hindi by default. "
-        "If the caller speaks English, switch to English. If mixed, use Hinglish."
-        if default_language == "hi"
-        else "Primary language is English. If the caller speaks Hindi, switch to Hindi."
-    )
-    return f"""
-            You are {agent_name}, a helpful and professional voice agent from {company}.
-            {language_instruction}
-            
-            Key behaviors:
-            1. Your first spoken turn after the call is answered must be a brief intro only.
-            2. After the caller acknowledges, continue the conversation naturally.
-            3. Be concise and respectful of the user's time.
-            3a. Default to one short sentence.
-            3b. Ask only one question at a time.
-            3c. Keep every reply short unless the caller asks for detail.
-            4. Keep conversation focused on real-estate context (property, site visit, budget, location, timeline).
-            5. After the intro, ask whether it is a good time to talk before going deeper.
-            6. Use transfer_call ONLY when user clearly asks transfer (word must include "transfer" or "live agent").
-            7. Never trigger transfer from partial or unclear words.
-            8. If transfer intent is unclear, ask a clarification question instead of calling transfer_call.
-            9. Never call transfer_call on one-word or noisy utterances.
-            """
+
+    if default_language == "hi":
+        language_rule = (
+            "Speak Hindi by default. Switch to English or Hinglish if the caller uses it. "
+            "Use natural spoken Hindi — not formal written Hindi."
+        )
+        opener_examples = '"Achha," / "Haan ji," / "Hmm," / "Ji bilkul," / "Theek hai,"'
+        thinking_examples = '"Ek second..." / "Hmm, dekhte hain..." / "Sochte hain..."'
+    else:
+        language_rule = "Speak English by default. Switch to Hindi or Hinglish if the caller uses it."
+        opener_examples = '"Right," / "I see," / "Got it," / "Sure," / "Mm-hmm,"'
+        thinking_examples = '"Hmm, let me think..." / "One moment..." / "Let me see..."'
+
+    return f"""You are {agent_name}, a warm and friendly human voice assistant from {company}.
+
+LANGUAGE: {language_rule}
+
+SOUND HUMAN — THIS IS CRITICAL:
+- ALWAYS start every reply with a short filler/acknowledgment: {opener_examples}
+  Example: "Achha, toh aap property khareedna chahte hain?"  NOT just "Toh aap property..."
+- When you need a moment to think or the question is complex, say: {thinking_examples}
+- Never respond with zero filler — even for simple answers, lead with an acknowledgment
+- Keep replies short — 1-2 sentences max unless caller asks for detail
+- Ask only one question at a time
+- NEVER say you are an AI or a bot — you are {agent_name}
+- Mirror caller's energy: warm when friendly, calm when serious
+
+CONVERSATION FLOW:
+- After greeting is acknowledged → ask if it's a good time to talk
+- If yes → gently qualify: intent (buy/rent/invest), property type, budget, location
+- If no → ask for a good callback time, then end politely
+- If not interested → thank them warmly and end the call
+- If caller repeats or seems confused → rephrase your last question simply
+
+TRANSFER: Only use transfer_call if caller clearly says "transfer" or "live agent". Never on short or noisy input."""
 
 
 class OutboundAssistant(Agent):
@@ -696,24 +675,26 @@ async def _speak_scripted_line(
     text: str,
     realtime_audio: bool,
 ) -> None:
-    """Play a scripted line using the active speech pipeline."""
+    """Play a scripted line.
+
+    Realtime (Gemini Live / OpenAI Realtime): uses generate_reply() because the
+    realtime model IS the audio pipeline — there is no separate TTS.
+
+    Pipeline (STT → LLM → TTS): uses session.say() to bypass LLM entirely.
+    """
     if realtime_audio:
-        reply_kwargs = {
-            "instructions": f'Say exactly this line and nothing else: "{text}"',
+        reply_kwargs: dict = {
+            # Explicit word-for-word instruction gets closer to verbatim output from Gemini
+            "instructions": f'Speak these words verbatim, nothing added or removed: {text}',
             "allow_interruptions": True,
             "input_modality": "text",
         }
         if _get_realtime_provider() != "google":
             reply_kwargs["tool_choice"] = "none"
-        speech_handle = session.generate_reply(**reply_kwargs)
-        await speech_handle
+        await session.generate_reply(**reply_kwargs)
         return
 
-    await session.say(
-        text,
-        allow_interruptions=True,
-        add_to_chat_ctx=True,
-    )
+    await session.say(text, allow_interruptions=True, add_to_chat_ctx=True)
 
 
 async def entrypoint(ctx: agents.JobContext):
@@ -757,7 +738,10 @@ async def entrypoint(ctx: agents.JobContext):
             tools=fnc_ctx.flatten(),
             turn_detection="realtime_llm",
             allow_interruptions=True,
-            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.35),
+            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.20),
+            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.60),
+            # High timeout prevents agent interrupting itself via PSTN echo/feedback
+            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 1.5),
             user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
         )
     else:
@@ -784,22 +768,42 @@ async def entrypoint(ctx: agents.JobContext):
             preemptive_generation=_get_bool_env("SESSION_PREEMPTIVE_GENERATION", True),
         )
 
-    # Start the session
-    await session.start(
-        room=ctx.room,
-        agent=OutboundAssistant(),
-        room_options=RoomOptions(
-            audio_input=AudioInputOptions(
-                noise_cancellation=(
-                    noise_cancellation.BVCTelephony()
-                    if os.getenv("ENABLE_NOISE_CANCELLATION", "true").lower() == "true"
-                    else None
-                ),
-                frame_size_ms=_get_int_env("ROOM_AUDIO_FRAME_SIZE_MS", 20),
-            ),
-            close_on_disconnect=True,
-        ),
+    # Pre-resolve greeting and trunk ID concurrently while Gemini WebSocket is connecting.
+    # This hides lookup latency inside session.start() so dialing begins the moment
+    # the Gemini connection is ready.
+    agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
+    company = os.getenv("AGENT_COMPANY_NAME", "Estate Company")
+    first_message = _repair_mojibake(os.getenv("OUTBOUND_FIRST_MESSAGE")) or _default_first_message(
+        agent_name, company, _get_default_language()
     )
+    inbound_greeting = _repair_mojibake(os.getenv("INBOUND_FIRST_MESSAGE")) or first_message
+
+    async def _start_session_and_resolve_trunk():
+        start_task = asyncio.create_task(
+            session.start(
+                room=ctx.room,
+                agent=OutboundAssistant(),
+                room_options=RoomOptions(
+                    audio_input=AudioInputOptions(
+                        noise_cancellation=(
+                            noise_cancellation.BVCTelephony()
+                            if os.getenv("ENABLE_NOISE_CANCELLATION", "true").lower() == "true"
+                            else None
+                        ),
+                        frame_size_ms=_get_int_env("ROOM_AUDIO_FRAME_SIZE_MS", 20),
+                    ),
+                    close_on_disconnect=True,
+                ),
+            )
+        )
+        if phone_number:
+            trunk_task = asyncio.create_task(_resolve_outbound_trunk_id(ctx, OUTBOUND_TRUNK_ID))
+            await start_task
+            return await trunk_task
+        await start_task
+        return None
+
+    resolved_trunk_id = await _start_session_and_resolve_trunk()
 
     @session.on("user_input_transcribed")
     def _on_user_input_transcribed(ev) -> None:
@@ -864,57 +868,42 @@ async def entrypoint(ctx: agents.JobContext):
             logger.debug(f"No-speech reprompt skipped: {reprompt_error}")
 
     if phone_number:
+        # first_message and trunk_id are already resolved (done concurrently with session.start)
+        trunk_id = resolved_trunk_id
         logger.info(f"Initiating outbound SIP call to {phone_number}...")
         try:
-            trunk_id = await _resolve_outbound_trunk_id(ctx, OUTBOUND_TRUNK_ID)
             if not _is_trunk_id(trunk_id):
                 logger.error(
-                    "No valid outbound trunk ID found. Set OUTBOUND_TRUNK_ID=ST_xxx in env. "
-                    "LIVEKIT_SIP_URI/sip:... is not a trunk ID."
+                    "No valid outbound trunk ID found. Set OUTBOUND_TRUNK_ID=ST_xxx in env."
                 )
                 ctx.shutdown()
                 return
-            # Create a SIP participant to dial out
-            # This effectively "calls" the phone number and brings them into this room
+
             await ctx.api.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
                     room_name=ctx.room.name,
                     sip_trunk_id=trunk_id,
                     sip_call_to=phone_number,
-                    participant_identity=f"sip_{phone_number}", # Unique ID for the SIP user
-                    wait_until_answered=True, # Important: Wait for pickup before continuing
+                    participant_identity=f"sip_{phone_number}",
+                    wait_until_answered=True,
                 )
             )
-            logger.info("Call answered! Agent is now listening.")
+            logger.info("Call answered! Sending greeting immediately...")
 
-            # Speak first so outbound calls do not stay silent.
-            agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
-            company = os.getenv("AGENT_COMPANY_NAME", "Estate Company")
-            default_language = _get_default_language()
-            first_message = _repair_mojibake(os.getenv("OUTBOUND_FIRST_MESSAGE")) or _default_first_message(
-                agent_name,
-                company,
-                default_language,
-            )
             try:
-                await _speak_scripted_line(
-                    session,
-                    text=first_message,
-                    realtime_audio=realtime_audio,
-                )
+                await _speak_scripted_line(session, text=first_message, realtime_audio=realtime_audio)
                 logger.info("Initial greeting sent.")
                 reprompt_task = asyncio.create_task(_reprompt_if_no_speech())
             except Exception as greet_error:
                 logger.warning(f"Failed to send initial greeting: {greet_error}")
-            
+
         except Exception as e:
             logger.error(f"Failed to place outbound call: {e}")
-            # Ensure we clean up if the call fails
             ctx.shutdown()
     else:
-        # Fallback for inbound calls (if this agent is used for that)
+        # Inbound / web call
         logger.info("No phone number in metadata. Treating as inbound/web call.")
-        await session.generate_reply(instructions="Greet the user.")
+        await _speak_scripted_line(session, text=inbound_greeting, realtime_audio=realtime_audio)
 
 
 if __name__ == "__main__":
