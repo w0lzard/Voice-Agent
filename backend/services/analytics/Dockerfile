@@ -20,12 +20,12 @@ COPY shared/auth ./auth
 # Copy all services
 COPY services ./services
 
-# Expose port
+# Expose port (default 8001, overridden by PORT env var on Render)
 EXPOSE 8001
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8001/health || exit 1
+    CMD curl -f http://localhost:${PORT:-8001}/health || exit 1
 
-# Run analytics service
-CMD ["uvicorn", "services.analytics.main:app", "--host", "0.0.0.0", "--port", "8001"]
+# Run analytics service — PORT is injected by Render; falls back to 8001 locally
+CMD sh -c "uvicorn services.analytics.main:app --host 0.0.0.0 --port ${PORT:-8001}"

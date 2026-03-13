@@ -23,12 +23,12 @@ COPY services ./services
 # Create logs directory
 RUN mkdir -p /app/logs
 
-# Expose port
+# Expose port (default 8003, overridden by PORT env var on Render)
 EXPOSE 8003
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8003/health || exit 1
+    CMD curl -f http://localhost:${PORT:-8003}/health || exit 1
 
-# Run orchestration service
-CMD ["uvicorn", "services.orchestration.main:app", "--host", "0.0.0.0", "--port", "8003"]
+# Run orchestration service — PORT is injected by Render; falls back to 8003 locally
+CMD sh -c "uvicorn services.orchestration.main:app --host 0.0.0.0 --port ${PORT:-8003}"

@@ -1,0 +1,265 @@
+services:
+  # =============================================================
+  # REDIS — Cache & Celery broker
+  # =============================================================
+  - type: redis
+    name: vobiz-redis
+    plan: free          # upgrade to starter ($10/mo) for persistence
+    maxmemoryPolicy: noeviction
+    ipAllowList: []     # private — internal access only
+
+  # =============================================================
+  # CONFIG SERVICE  (internal, port 8002)
+  # =============================================================
+  - type: web
+    name: vobiz-config
+    runtime: docker
+    dockerfilePath: ./backend/services/config/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8002
+      - key: MONGODB_URI
+        sync: false           # set in Render dashboard
+      - key: MONGODB_DB_NAME
+        value: ai_outbound
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: vobiz-redis
+          property: connectionString
+      - key: CACHE_TTL
+        value: 300
+      - key: INTERNAL_API_KEY
+        sync: false
+
+  # =============================================================
+  # ANALYTICS SERVICE  (internal, port 8001)
+  # =============================================================
+  - type: web
+    name: vobiz-analytics
+    runtime: docker
+    dockerfilePath: ./backend/services/analytics/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8001
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB_NAME
+        value: ai_outbound
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: vobiz-redis
+          property: connectionString
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: AWS_BUCKET_NAME
+        sync: false
+      - key: AWS_REGION
+        value: ap-south-1
+      - key: INTERNAL_API_KEY
+        sync: false
+
+  # =============================================================
+  # ORCHESTRATION SERVICE  (internal, port 8003)
+  # =============================================================
+  - type: web
+    name: vobiz-orchestration
+    runtime: docker
+    dockerfilePath: ./backend/services/orchestration/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8003
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB_NAME
+        value: ai_outbound
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: vobiz-redis
+          property: connectionString
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: INTERNAL_API_KEY
+        sync: false
+      - key: JWT_SECRET_KEY
+        sync: false
+
+  # =============================================================
+  # API GATEWAY  (public entry point, port 8000)
+  # =============================================================
+  - type: web
+    name: vobiz-gateway
+    runtime: docker
+    dockerfilePath: ./backend/services/gateway/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB_NAME
+        value: ai_outbound
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: vobiz-redis
+          property: connectionString
+
+      # ---- Internal service routing (private networking) ----
+      - key: CONFIG_SERVICE_URL
+        value: http://vobiz-config:8002
+      - key: ANALYTICS_SERVICE_URL
+        value: http://vobiz-analytics:8001
+      - key: ORCHESTRATION_SERVICE_URL
+        value: http://vobiz-orchestration:8003
+
+      # ---- Authentication ----
+      - key: AUTH_ENABLED
+        value: true
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: JWT_ALGORITHM
+        value: HS256
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: 30
+      - key: REFRESH_TOKEN_EXPIRE_DAYS
+        value: 7
+      - key: INTERNAL_API_KEY
+        sync: false
+
+      # ---- LiveKit ----
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+
+      # ---- AI providers ----
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: REALTIME_PROVIDER
+        value: google
+
+      # ---- CORS (restrict to your frontend URL in production) ----
+      - key: CORS_ALLOW_ORIGINS
+        value: "*"
+
+  # =============================================================
+  # LIVEKIT AGENT WORKER  (background, no HTTP port)
+  # =============================================================
+  - type: worker
+    name: vobiz-agent
+    runtime: docker
+    dockerfilePath: ./backend/services/agent/Dockerfile
+    dockerContext: ./backend
+    plan: starter       # must NOT sleep — handles live calls
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB_NAME
+        value: ai_outbound
+
+      # ---- LiveKit ----
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+
+      # ---- AI providers ----
+      - key: GOOGLE_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: REALTIME_PROVIDER
+        value: google
+      - key: GOOGLE_REALTIME_MODEL
+        value: gemini-2.5-flash-native-audio-preview-12-2025
+      - key: GOOGLE_REALTIME_VOICE
+        value: Kore
+
+      # ---- Vobiz / SIP ----
+      - key: VOBIZ_SIP_DOMAIN
+        sync: false
+      - key: VOBIZ_AUTH_ID
+        sync: false
+      - key: VOBIZ_AUTH_TOKEN
+        sync: false
+      - key: VOBIZ_CALLER_ID
+        sync: false
+      - key: OUTBOUND_TRUNK_ID
+        sync: false
+      - key: VOBIZ_TRUNK_NAME
+        value: Demo
+
+      # ---- Agent persona ----
+      - key: AGENT_PERSONA_NAME
+        value: Shubhi
+      - key: AGENT_COMPANY_NAME
+        value: Estate Company
+      - key: AGENT_DEFAULT_LANGUAGE
+        value: hi
+      - key: OUTBOUND_FIRST_MESSAGE
+        value: "Namaste, main Shubhi Estate Company se bol rahi hoon. Kya abhi baat karna theek rahega?"
+      - key: DEFAULT_TRANSFER_NUMBER
+        sync: false
+
+      # ---- Internal service callback ----
+      - key: ANALYTICS_SERVICE_URL
+        value: http://vobiz-analytics:8001
+      - key: INTERNAL_API_KEY
+        sync: false
+
+  # =============================================================
+  # CELERY WORKER  (campaign job queue)
+  # =============================================================
+  - type: worker
+    name: vobiz-celery
+    runtime: docker
+    dockerfilePath: ./backend/services/orchestration/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    startCommand: celery -A services.orchestration.tasks_queue.celery_app worker --loglevel=info --concurrency=2
+    envVars:
+      - key: MONGODB_URI
+        sync: false
+      - key: MONGODB_DB_NAME
+        value: ai_outbound
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: vobiz-redis
+          property: connectionString
+      - key: LIVEKIT_URL
+        sync: false
+      - key: LIVEKIT_API_KEY
+        sync: false
+      - key: LIVEKIT_API_SECRET
+        sync: false
+      - key: INTERNAL_API_KEY
+        sync: false

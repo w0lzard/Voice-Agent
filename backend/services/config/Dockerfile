@@ -20,12 +20,12 @@ COPY shared/auth ./auth
 # Copy all services (needed for imports)
 COPY services ./services
 
-# Expose port
+# Expose port (default 8002, overridden by PORT env var on Render)
 EXPOSE 8002
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8002/health || exit 1
+    CMD curl -f http://localhost:${PORT:-8002}/health || exit 1
 
-# Run config service
-CMD ["uvicorn", "services.config.main:app", "--host", "0.0.0.0", "--port", "8002"]
+# Run config service — PORT is injected by Render; falls back to 8002 locally
+CMD sh -c "uvicorn services.config.main:app --host 0.0.0.0 --port ${PORT:-8002}"
