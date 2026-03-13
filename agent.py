@@ -18,7 +18,7 @@ from livekit.plugins import (
     silero,
 )
 from livekit.agents import llm
-from typing import Annotated, Optional
+from typing import Optional
 
 # Load environment variables
 def load_environment() -> None:
@@ -108,12 +108,35 @@ def _get_realtime_provider() -> str:
     return os.getenv("REALTIME_PROVIDER", "openai").strip().lower() or "openai"
 
 
+<<<<<<< HEAD
 def _get_realtime_language_code() -> str:
     language = _get_default_language()
     return {
         "hi": "hi-IN",
         "en": "en-US",
     }.get(language, language)
+=======
+def _validate_runtime_provider_keys(realtime_audio: bool) -> bool:
+    provider = _get_realtime_provider()
+    if realtime_audio and provider == "google":
+        google_key = os.getenv("GOOGLE_API_KEY", "").strip()
+        if not google_key:
+            logger.error("GOOGLE_API_KEY is missing in environment. Cannot start Gemini Live conversation.")
+            return False
+        return True
+
+    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not openai_key:
+        logger.error("OPENAI_API_KEY is missing in environment. Cannot start outbound conversation.")
+        return False
+    if openai_key.startswith("sk-or-v1"):
+        logger.error(
+            "Detected OpenRouter key in OPENAI_API_KEY. "
+            "Please set a real OpenAI key (sk-... / sk-proj-...) in .env."
+        )
+        return False
+    return True
+>>>>>>> 242873f8d3b37699d23ce567dadb7d39587d30bf
 
 
 def _repair_mojibake(value: str | None) -> str | None:
@@ -367,12 +390,19 @@ def _build_realtime_llm():
             "Using Gemini Live audio (model=%s voice=%s language=%s)",
             model,
             voice,
+<<<<<<< HEAD
             _get_realtime_language_code(),
+=======
+            _get_default_language(),
+>>>>>>> 242873f8d3b37699d23ce567dadb7d39587d30bf
         )
         return google.realtime.RealtimeModel(
             model=model,
             voice=voice,
+<<<<<<< HEAD
             language=_get_realtime_language_code(),
+=======
+>>>>>>> 242873f8d3b37699d23ce567dadb7d39587d30bf
             temperature=_get_float_env("OPENAI_REALTIME_TEMPERATURE", 0.8),
             instructions=_build_agent_instructions(),
         )
@@ -422,6 +452,38 @@ def _build_vad():
         sample_rate=16000,
     )
 
+
+
+def _build_agent_instructions() -> str:
+    agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
+    company = os.getenv("AGENT_COMPANY_NAME", "real estate company")
+    default_language = os.getenv("AGENT_DEFAULT_LANGUAGE", "hi").strip().lower()
+    voice_style_hint = os.getenv("VOICE_STYLE_HINT", "").strip()
+    language_instruction = (
+        "Primary language is Hindi. Reply in simple Hindi by default. "
+        "If the caller speaks English, switch to English. If mixed, use Hinglish."
+        if default_language == "hi"
+        else "Primary language is English. If the caller speaks Hindi, switch to Hindi."
+    )
+    return f"""
+            You are {agent_name}, a helpful and professional voice agent from {company}.
+            {language_instruction}
+            {"Voice style: " + voice_style_hint if voice_style_hint else ""}
+
+            Key behaviors:
+            1. Your first spoken turn after the call is answered must be a brief intro only.
+            2. After the caller acknowledges, continue the conversation naturally.
+            3. Be concise and respectful of the user's time.
+            3a. Default to one short sentence.
+            3b. Ask only one question at a time.
+            3c. Keep every reply short unless the caller asks for detail.
+            4. Keep conversation focused on real-estate context (property, site visit, budget, location, timeline).
+            5. After the intro, ask whether it is a good time to talk before going deeper.
+            6. Use transfer_call ONLY when user clearly asks transfer (word must include "transfer" or "live agent").
+            7. Never trigger transfer from partial or unclear words.
+            8. If transfer intent is unclear, ask a clarification question instead of calling transfer_call.
+            9. Never call transfer_call on one-word or noisy utterances.
+            """
 
 
 class TransferFunctions(llm.ToolContext):
@@ -590,6 +652,7 @@ class TransferFunctions(llm.ToolContext):
             return f"Error executing transfer: {e}"
 
 
+<<<<<<< HEAD
 def _build_agent_instructions() -> str:
     agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
     company = os.getenv("AGENT_COMPANY_NAME", "real estate company")
@@ -620,6 +683,8 @@ def _build_agent_instructions() -> str:
             """
 
 
+=======
+>>>>>>> 242873f8d3b37699d23ce567dadb7d39587d30bf
 class OutboundAssistant(Agent):
 
     """
@@ -673,6 +738,7 @@ async def entrypoint(ctx: agents.JobContext):
     4. Waits for answer before speaking.
     """
     logger.info(f"Connecting to room: {ctx.room.name}")
+<<<<<<< HEAD
 
     provider = _get_realtime_provider()
     if _use_realtime_audio() and provider == "google":
@@ -694,6 +760,8 @@ async def entrypoint(ctx: agents.JobContext):
             )
             ctx.shutdown()
             return
+=======
+>>>>>>> 242873f8d3b37699d23ce567dadb7d39587d30bf
     
     # parse the phone number from the metadata sent by the dispatch script
     phone_number = None
@@ -709,6 +777,9 @@ async def entrypoint(ctx: agents.JobContext):
     last_user_speech_at = time.time()
     reprompt_task: asyncio.Task | None = None
     realtime_audio = _use_realtime_audio()
+    if not _validate_runtime_provider_keys(realtime_audio):
+        ctx.shutdown()
+        return
 
     # Initialize the Agent Session with plugins
     if realtime_audio:

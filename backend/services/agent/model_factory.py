@@ -9,6 +9,12 @@ from openai.types.beta.realtime.session import TurnDetection, InputAudioTranscri
 
 logger = logging.getLogger("model-factory")
 
+deepgram = None
+elevenlabs = None
+anthropic = None
+cartesia = None
+google = None
+
 # Check which plugins are available
 AVAILABLE_PLUGINS = {
     "openai": True,  # Always available (core)
@@ -105,7 +111,6 @@ def get_llm(voice_config: dict) -> Any:
         return anthropic.LLM(model=model)
     
     elif provider == "google" and AVAILABLE_PLUGINS["google"]:
-        from livekit.plugins import google
         return google.LLM(model=model)
     
     elif provider == "groq" and AVAILABLE_PLUGINS["groq"]:
@@ -184,7 +189,10 @@ def get_realtime_model(voice_config: dict) -> Any:
         )
     
     elif provider == "google" and AVAILABLE_PLUGINS["google"]:
+<<<<<<< HEAD
         from livekit.plugins import google
+=======
+>>>>>>> 242873f8d3b37699d23ce567dadb7d39587d30bf
         return google.realtime.RealtimeModel(
             model=model,
             voice=voice_id,
@@ -199,7 +207,7 @@ def get_realtime_model(voice_config: dict) -> Any:
 
 
 def get_available_providers() -> dict:
-    """Return dictionary of available providers for frontend."""
+    """Return dictionary of available providers for client applications."""
     return {
         "stt": ["openai"] + ([p for p in ["deepgram", "assemblyai"] if AVAILABLE_PLUGINS.get(p)]),
         "llm": ["openai"] + ([p for p in ["anthropic", "google", "groq"] if AVAILABLE_PLUGINS.get(p)]),

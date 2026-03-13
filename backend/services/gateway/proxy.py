@@ -5,6 +5,7 @@ This enables proper microservice architecture where Gateway routes to:
 - Orchestration Service (8003): Campaigns, Job Queue
 - Config Service (8002): Assistants, SIP, Phone Numbers
 """
+import os
 import httpx
 import logging
 from typing import Optional, Dict, Any
@@ -12,10 +13,18 @@ from fastapi import HTTPException, Request
 
 logger = logging.getLogger("gateway.proxy")
 
-# Service URLs (container-to-container communication)
-ANALYTICS_SERVICE_URL = "http://analytics:8001"
-ORCHESTRATION_SERVICE_URL = "http://orchestration:8003"
-CONFIG_SERVICE_URL = "http://config:8002"
+
+def _normalize_service_url(value: str) -> str:
+    value = value.strip()
+    if "://" in value:
+        return value.rstrip("/")
+    return f"http://{value.rstrip('/')}"
+
+
+# Service URLs (Docker Compose defaults, override in Render or other clouds)
+ANALYTICS_SERVICE_URL = _normalize_service_url(os.getenv("ANALYTICS_SERVICE_URL", "http://analytics:8001"))
+ORCHESTRATION_SERVICE_URL = _normalize_service_url(os.getenv("ORCHESTRATION_SERVICE_URL", "http://orchestration:8003"))
+CONFIG_SERVICE_URL = _normalize_service_url(os.getenv("CONFIG_SERVICE_URL", "http://config:8002"))
 
 
 async def proxy_request(

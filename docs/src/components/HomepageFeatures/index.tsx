@@ -1,4 +1,4 @@
-import type {ReactNode} from 'react';
+import type { ReactNode } from 'react';
 import clsx from 'clsx';
 import Heading from '@theme/Heading';
 import styles from './styles.module.css';
@@ -11,40 +11,40 @@ type FeatureItem = {
 
 const FeatureList: FeatureItem[] = [
   {
-    title: 'Easy to Use',
+    title: 'Outbound Calling',
     Svg: require('@site/static/img/undraw_docusaurus_mountain.svg').default,
     description: (
       <>
-        Docusaurus was designed from the ground up to be easily installed and
-        used to get your website up and running quickly.
+        Run the standalone worker, sync the SIP trunk from <code>.env</code>,
+        and place outbound calls through LiveKit and Vobiz.
       </>
     ),
   },
   {
-    title: 'Focus on What Matters',
+    title: 'Realtime Voice Models',
     Svg: require('@site/static/img/undraw_docusaurus_tree.svg').default,
     description: (
       <>
-        Docusaurus lets you focus on your docs, and we&apos;ll do the chores. Go
-        ahead and move your docs into the <code>docs</code> directory.
+        Choose Gemini Live or OpenAI realtime, tune the first message, and
+        control voice behavior from environment variables.
       </>
     ),
   },
   {
-    title: 'Powered by React',
+    title: 'Backend Services',
     Svg: require('@site/static/img/undraw_docusaurus_react.svg').default,
     description: (
       <>
-        Extend or customize your website layout by reusing React. Docusaurus can
-        be extended while reusing the same header and footer.
+        Add gateway, analytics, orchestration, config, Redis, and workers when
+        you need APIs, campaigns, or production-style deployment.
       </>
     ),
   },
 ];
 
-function Feature({title, Svg, description}: FeatureItem) {
+function Feature({ title, Svg, description }: FeatureItem) {
   return (
-    <div className={clsx('col col--4')}>
+    <div className={clsx('col col--4', styles.featureCard)}>
       <div className="text--center">
         <Svg className={styles.featureSvg} role="img" />
       </div>

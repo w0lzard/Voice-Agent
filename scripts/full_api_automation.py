@@ -16,20 +16,25 @@ Usage:
 import httpx
 import asyncio
 import json
+import os
 from datetime import datetime
 
 # ============================================================
 # CONFIGURATION
 # ============================================================
 BASE_URL = "http://localhost:8000"
-LOGIN_EMAIL = "test@test.com"
-LOGIN_PASSWORD = "test@test.com"
+LOGIN_EMAIL = os.getenv("AUTOMATION_LOGIN_EMAIL", "test@test.com")
+LOGIN_PASSWORD = os.getenv("AUTOMATION_LOGIN_PASSWORD", "test@test.com")
 
 # Test agent names
 AGENT_NAMES = ["Pooja", "Riya", "Ananya", "Rakhi", "Priya"]
 
 # Target phone for calls
-TARGET_PHONE = "+919148227303"
+TARGET_PHONE = os.getenv("AUTOMATION_TARGET_PHONE", "+919148227303")
+SIP_DOMAIN = os.getenv("AUTOMATION_SIP_DOMAIN", "")
+SIP_USERNAME = os.getenv("AUTOMATION_SIP_USERNAME", "")
+SIP_PASSWORD = os.getenv("AUTOMATION_SIP_PASSWORD", "")
+FROM_NUMBER = os.getenv("AUTOMATION_FROM_NUMBER", "")
 
 # ============================================================
 # Colors
@@ -85,6 +90,13 @@ async def run_full_automation():
         print(f"Target Phone: {TARGET_PHONE}")
         print(f"Agent Names: {', '.join(AGENT_NAMES)}")
         print("=" * 70)
+
+        if not all([SIP_DOMAIN, SIP_USERNAME, SIP_PASSWORD, FROM_NUMBER]):
+            log_error(
+                "Automation SIP values are missing. Set AUTOMATION_SIP_DOMAIN, "
+                "AUTOMATION_SIP_USERNAME, AUTOMATION_SIP_PASSWORD, and AUTOMATION_FROM_NUMBER."
+            )
+            return
         
         # ============================================================
         # STEP 1: Login and Create API Key
@@ -185,10 +197,10 @@ Always introduce yourself as {name}.""",
         
         r = await client.post("/api/sip-configs", json={
             "name": "Automation Test SIP",
-            "sip_domain": "008654e7.sip.vobiz.ai",
-            "sip_username": "piyush123",
-            "sip_password": "Password@123",
-            "from_number": "+912271264303",
+            "sip_domain": SIP_DOMAIN,
+            "sip_username": SIP_USERNAME,
+            "sip_password": SIP_PASSWORD,
+            "from_number": FROM_NUMBER,
             "is_default": False
         })
         
@@ -218,7 +230,7 @@ Always introduce yourself as {name}.""",
         log_step(5, total_steps, "Create Phone Number")
         
         r = await client.post("/api/phone-numbers", json={
-            "number": "+912271264303",
+            "number": FROM_NUMBER,
             "label": "Automation Test Line",
             "provider": "vobiz"
         })

@@ -50,7 +50,7 @@ async def add_phone_number(
         
         phone = await PhoneNumberService.create_inbound_number(inbound_req, x_workspace_id)
         
-        # Include sip_uri in response so frontend can show it
+        # Include sip_uri in response so client apps can show it
         return {
             "phone_id": phone.phone_id, 
             "number": phone.number, 

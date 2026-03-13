@@ -1,11 +1,23 @@
 .features {
   display: flex;
   align-items: center;
-  padding: 2rem 0;
+  padding: 2rem 0 3rem;
   width: 100%;
 }
 
+.featureCard {
+  padding: 1rem;
+}
+
 .featureSvg {
-  height: 200px;
-  width: 200px;
+  height: 180px;
+  width: 180px;
+}
+
+.featureCard h3 {
+  margin-top: 1rem;
+}
+
+.featureCard p {
+  color: var(--ifm-color-emphasis-700);
 }

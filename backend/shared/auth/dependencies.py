@@ -23,7 +23,7 @@ async def get_current_user(
     Get the current authenticated user.
     
     Supports two auth methods:
-    1. Bearer token (JWT) - For dashboard/frontend
+    1. Bearer token (JWT) - For browser or client apps
     2. X-API-Key header - For programmatic API access
     
     Returns None if AUTH_ENABLED is False.

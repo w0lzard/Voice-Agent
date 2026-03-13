@@ -2,6 +2,7 @@
 Rate limiting middleware using Redis.
 Provides DDoS protection and API abuse prevention.
 """
+import os
 import time
 import logging
 from typing import Optional, Callable
@@ -152,4 +153,4 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 
 # Create singleton instance
-rate_limiter = RateLimiter()
+rate_limiter = RateLimiter(redis_url=os.getenv("REDIS_URL", "redis://redis:6379/0"))

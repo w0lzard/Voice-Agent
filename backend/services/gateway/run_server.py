@@ -18,5 +18,5 @@ if __name__ == "__main__":
         "services.gateway.main:app",
         host=config.API_HOST,
         port=config.API_PORT,
-        reload=True,
+        reload=os.getenv("UVICORN_RELOAD", "false").lower() == "true",
     )

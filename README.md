@@ -1,31 +1,56 @@
-# Voice Agent
+# 🚀 Voice Agent Platform
 
-Standalone phone agent built on LiveKit SIP, Vobiz telephony, and OpenAI speech models.
+<p align="center">
+  <img src="assets/readme-banner.svg" alt="Voice Agent Platform banner" width="100%" />
+</p>
 
-This root-level setup is the fastest way to run the agent in this repository. It supports:
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python 3.11+" />
+  <img src="https://img.shields.io/badge/LiveKit-SIP%20%26%20Dispatch-0EA5E9?style=for-the-badge" alt="LiveKit" />
+  <img src="https://img.shields.io/badge/Vobiz-Telephony-F97316?style=for-the-badge" alt="Vobiz" />
+  <img src="https://img.shields.io/badge/Gemini%20%2F%20OpenAI-Voice%20AI-111827?style=for-the-badge" alt="Gemini and OpenAI" />
+</p>
 
-- outbound PSTN calls through Vobiz
-- inbound PSTN calls through LiveKit dispatch rules
-- OpenAI STT, LLM, and TTS conversation flow
-- Hindi-first or English-first behavior
-- transfer to a default or spoken destination number
-- calling any valid target number from the CLI
+<p align="center">
+  <b>Single source of truth for this repo.</b><br/>
+  This README replaces the scattered markdown docs and covers setup, calling, backend services, deployment, troubleshooting, and contribution notes in one place.
+</p>
 
-> This repository also contains a larger backend/frontend platform under `backend/` and `frontend/`. You do not need that stack to use the standalone flow documented here.
+## ✨ What This Repo Does
 
-## At A Glance
+This repository contains two usable modes:
 
-| File | Purpose |
+1. **Standalone calling flow**
+   Use the root scripts for the fastest path to outbound and inbound voice calls.
+
+2. **Backend service stack**
+   Use the `backend/` microservices if you want APIs, campaigns, analytics, auth, and admin-style orchestration.
+
+Core capabilities:
+
+- 📞 Outbound calling through **LiveKit SIP + Vobiz**
+- ☎️ Inbound call handling through **LiveKit dispatch**
+- 🧠 Voice AI using **Gemini Live** or **OpenAI**
+- 🌐 Hindi-first, English-first, or Hinglish conversations
+- 🔁 SIP trunk sync from `.env`
+- 🛠️ Transfer support, analytics hooks, and optional campaign orchestration
+
+## 🗂️ Repo Layout
+
+| Path | Purpose |
 | --- | --- |
 | `agent.py` | Standalone outbound worker |
-| `make_call.py` | Dispatch outbound calls from the CLI |
 | `agent_inbound.py` | Standalone inbound worker |
-| `setup_trunk.py` | Sync an existing LiveKit outbound trunk from `.env` |
-| `setup_inbound.py` | Create the LiveKit inbound trunk and dispatch rule |
-| `.env.example` | Environment template |
-| `transfer_call.md` | Transfer-specific notes |
+| `make_call.py` | CLI dispatcher for outbound calls |
+| `setup_trunk.py` | Sync the LiveKit outbound trunk from `.env` |
+| `setup_inbound.py` | Create the inbound LiveKit trunk + dispatch rule |
+| `backend/` | Multi-service backend platform |
+| `scripts/` | API automation and test helpers |
+| `assets/readme-banner.svg` | README hero banner |
 
-## Flow
+## 🧭 Architecture
+
+### Standalone Flow
 
 ```mermaid
 flowchart LR
@@ -33,34 +58,26 @@ flowchart LR
     LK --> AGENT[agent.py]
     AGENT --> SIP[LiveKit SIP]
     SIP --> VOBIZ[Vobiz]
-    VOBIZ --> PSTN[Phone Network]
-    PSTN --> USER[Caller]
+    VOBIZ --> USER[Phone User]
 ```
 
-Outbound flow:
+### Backend Service Flow
 
-1. `make_call.py` dispatches a LiveKit job with the target phone number.
-2. `agent.py` joins the room as `outbound-caller`.
-3. The worker resolves or updates the outbound SIP trunk using `.env`.
-4. LiveKit dials the destination over Vobiz.
-5. OpenAI STT -> LLM -> TTS drives the conversation.
+```mermaid
+flowchart LR
+    CLIENT[Your Frontend / API Client] --> GW[gateway]
+    GW --> CFG[config]
+    GW --> AN[analytics]
+    GW --> ORCH[orchestration]
+    ORCH --> REDIS[redis / celery]
+    ORCH --> AG[agent worker]
+    AN --> MDB[(MongoDB)]
+    CFG --> MDB
+```
 
-Inbound flow:
+## ⚡ Quick Start: Standalone Agent
 
-1. Vobiz sends the inbound call to your LiveKit SIP endpoint.
-2. LiveKit matches the inbound trunk and dispatch rule.
-3. `agent_inbound.py` joins the room as `voice-assistant`.
-4. The agent greets the caller and starts the conversation.
-
-## Requirements
-
-- Python 3.11 or newer
-- A LiveKit project
-- A Vobiz account with SIP access
-- An OpenAI API key
-- Optional: Deepgram if you want to use the current inbound worker as-is
-
-## Install
+### 1. Install
 
 ```powershell
 python -m venv .venv
@@ -68,268 +85,310 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-## Quick Start
-
-### 1. Create `.env`
+### 2. Create `.env`
 
 ```powershell
 Copy-Item .env.example .env
 ```
 
-Minimum outbound values:
+Minimum values you need:
 
 ```env
 LIVEKIT_URL=wss://your-project.livekit.cloud
 LIVEKIT_API_KEY=your_livekit_api_key
 LIVEKIT_API_SECRET=your_livekit_api_secret
 
-VOBIZ_SIP_DOMAIN=your-live-outbound-trunk.sip.vobiz.ai
+VOBIZ_SIP_DOMAIN=your-outbound-trunk.sip.vobiz.ai
 VOBIZ_AUTH_ID=your_vobiz_auth_id
 VOBIZ_AUTH_TOKEN=your_vobiz_auth_token
 VOBIZ_CALLER_ID=+91XXXXXXXXXX
 
-OPENAI_API_KEY=sk-...
+REALTIME_PROVIDER=google
+GOOGLE_API_KEY=your_google_api_key
+GOOGLE_REALTIME_MODEL=gemini-2.5-flash-native-audio-preview-12-2025
+GOOGLE_REALTIME_VOICE=Kore
+
 AGENT_DEFAULT_LANGUAGE=hi
-OPENAI_STT_LANGUAGE=hi
+DEFAULT_OUTBOUND_TARGET=+91XXXXXXXXXX
 ```
 
-### 2. Prepare the outbound trunk
-
-If you already know your LiveKit trunk ID:
+If you prefer OpenAI realtime instead:
 
 ```env
-OUTBOUND_TRUNK_ID=ST_xxxxxxxxxxxxx
+REALTIME_PROVIDER=openai
+OPENAI_API_KEY=sk-...
+OPENAI_REALTIME_MODEL=gpt-realtime-mini
+OPENAI_REALTIME_VOICE=marin
 ```
 
-Then run:
+### 3. Sync the outbound SIP trunk
 
 ```powershell
 python setup_trunk.py
 ```
 
-If you leave `OUTBOUND_TRUNK_ID` blank, `agent.py` will try to:
+This updates the LiveKit outbound trunk using the current `.env` values for:
 
-1. use the explicit trunk ID if present
-2. match by trunk name
-3. match by caller number
-4. create or sync a trunk from `.env` if needed
+- `VOBIZ_SIP_DOMAIN`
+- `VOBIZ_AUTH_ID` / `VOBIZ_USERNAME`
+- `VOBIZ_AUTH_TOKEN` / `VOBIZ_PASSWORD`
+- `VOBIZ_CALLER_ID` / `VOBIZ_OUTBOUND_NUMBER`
 
-### 3. Start the outbound worker
+### 4. Start the worker
 
 ```powershell
 python agent.py start
 ```
 
-For local debugging:
+For local debugging with file watching:
 
 ```powershell
 python agent.py dev
 ```
 
-### 4. Place a call
-
-Single number:
+### 5. Place a call
 
 ```powershell
 python make_call.py +919876543210
 ```
 
-Alternative form:
-
-```powershell
-python make_call.py --to +14155550123
-```
-
-Multiple numbers:
+Multiple targets:
 
 ```powershell
 python make_call.py --to +919876543210,+14155550123
 ```
 
-Or:
-
-```powershell
-python make_call.py --to +919876543210 --to +14155550123
-```
-
-Interactive prompt:
+Interactive mode:
 
 ```powershell
 python make_call.py
 ```
 
-`DEFAULT_OUTBOUND_TARGET` is only a fallback. The CLI can call any valid E.164 number you pass in.
+## ☎️ Inbound Setup
 
-## Inbound Setup
-
-### 1. Set the inbound number
+1. Set the inbound number in `.env`
 
 ```env
 VOBIZ_INBOUND_NUMBER=+91XXXXXXXXXX
 ```
 
-### 2. Create the LiveKit inbound trunk and dispatch rule
+2. Create inbound trunk + dispatch rule:
 
 ```powershell
 python setup_inbound.py
 ```
 
-The script prints the LiveKit SIP endpoint that must be configured in Vobiz as the Primary URI.
-
-### 3. Start the inbound worker
+3. Start the inbound worker:
 
 ```powershell
 python agent_inbound.py start
 ```
 
-### 4. Vobiz-side inbound checklist
+4. In Vobiz, point the inbound trunk to the LiveKit SIP URI and link the number.
 
-- inbound trunk exists and is active
-- Primary URI points to `<your-livekit-project>.sip.livekit.cloud`
-- inbound number is linked to the app or trunk
-- `agent_inbound.py` is running
+## 🧠 Voice Modes
 
-## Environment Guide
+### Gemini Live
 
-### Required for the standalone outbound agent
+Current recommended Gemini setup:
 
-| Variable | Required | Notes |
-| --- | --- | --- |
-| `LIVEKIT_URL` | Yes | LiveKit WebSocket URL |
-| `LIVEKIT_API_KEY` | Yes | LiveKit API key |
-| `LIVEKIT_API_SECRET` | Yes | LiveKit API secret |
-| `VOBIZ_SIP_DOMAIN` | Yes | Actual live Vobiz outbound trunk domain |
-| `VOBIZ_AUTH_ID` or `VOBIZ_USERNAME` | Yes | Vobiz SIP username |
-| `VOBIZ_AUTH_TOKEN` or `VOBIZ_PASSWORD` | Yes | Vobiz SIP password/token |
-| `VOBIZ_CALLER_ID` or `VOBIZ_OUTBOUND_NUMBER` | Yes | Caller ID for the outbound trunk |
-| `OPENAI_API_KEY` | Yes | OpenAI key for STT, LLM, and TTS |
+```env
+REALTIME_PROVIDER=google
+GOOGLE_REALTIME_MODEL=gemini-2.5-flash-native-audio-preview-12-2025
+GOOGLE_REALTIME_VOICE=Kore
+VOICE_STYLE_HINT=Speak in a bright, slightly higher-pitched feminine tone while staying natural and clear on phone audio.
+```
 
-### Important optional values
+Notes:
 
-| Variable | Purpose |
+- `Kore` is supported in the current Gemini path
+- there is no direct pitch knob exposed in this code path
+- higher / brighter tone is steered via `VOICE_STYLE_HINT`
+
+### OpenAI Realtime
+
+```env
+REALTIME_PROVIDER=openai
+OPENAI_REALTIME_MODEL=gpt-realtime-mini
+OPENAI_REALTIME_VOICE=marin
+```
+
+## 🧩 Important Environment Variables
+
+### Telephony
+
+| Variable | What it does |
 | --- | --- |
-| `OUTBOUND_TRUNK_ID` | Explicit LiveKit trunk ID (`ST_...`) |
+| `LIVEKIT_URL` | LiveKit websocket endpoint |
+| `LIVEKIT_API_KEY` | LiveKit API key |
+| `LIVEKIT_API_SECRET` | LiveKit API secret |
+| `OUTBOUND_TRUNK_ID` | LiveKit outbound trunk ID (`ST_...`) |
+| `VOBIZ_SIP_DOMAIN` | Vobiz outbound SIP domain |
+| `VOBIZ_AUTH_ID` / `VOBIZ_USERNAME` | Vobiz SIP username |
+| `VOBIZ_AUTH_TOKEN` / `VOBIZ_PASSWORD` | Vobiz SIP password |
+| `VOBIZ_CALLER_ID` / `VOBIZ_OUTBOUND_NUMBER` | Caller ID used on outbound calls |
 | `VOBIZ_TRUNK_NAME` | Friendly trunk name used for lookup and sync |
-| `DEFAULT_OUTBOUND_TARGET` | Fallback target used only if you do not pass a number |
-| `DEFAULT_TRANSFER_NUMBER` | Transfer destination used when the caller asks for transfer |
-| `AGENT_PERSONA_NAME` | Spoken persona name |
+
+### Agent behavior
+
+| Variable | What it does |
+| --- | --- |
+| `AGENT_PERSONA_NAME` | Spoken name of the agent |
 | `AGENT_COMPANY_NAME` | Spoken company name |
 | `AGENT_DEFAULT_LANGUAGE` | `hi` or `en` |
-| `OUTBOUND_FIRST_MESSAGE` | First message spoken after answer |
-| `OPENAI_STT_LANGUAGE` | Recommended: `hi` for Hindi-first, `en` for English-first |
+| `OUTBOUND_FIRST_MESSAGE` | First spoken message after answer |
+| `DEFAULT_OUTBOUND_TARGET` | Fallback target for CLI calls |
+| `DEFAULT_TRANSFER_NUMBER` | Transfer destination |
+| `VOICE_STYLE_HINT` | Style prompt for Gemini voice delivery |
 
-### Backend-only values
+### Provider selection
 
-If you are only using the standalone root scripts, these can stay unset or placeholder values:
+| Variable | Values |
+| --- | --- |
+| `REALTIME_PROVIDER` | `google` or `openai` |
+| `OPENAI_REALTIME_AUDIO` | `true` / `false` |
+| `GOOGLE_REALTIME_MODEL` | Gemini Live model |
+| `GOOGLE_REALTIME_VOICE` | Gemini voice name |
+| `OPENAI_REALTIME_MODEL` | OpenAI realtime model |
+| `OPENAI_REALTIME_VOICE` | OpenAI realtime voice |
 
-- `MONGODB_*`
-- `REDIS_*`
-- `AUTH_*`
-- `JWT_*`
-- `INTERNAL_API_KEY`
-- `AWS_*`
-- `VITE_API_URL`
+## 🏗️ Backend Services
 
-## Important Vobiz Notes
+The `backend/` directory is the larger production-style service stack.
 
-- `VOBIZ_SIP_DOMAIN` must be your actual outbound trunk domain from Vobiz.
-- Do not put the Vobiz application SIP URI there.
-- Do not put the LiveKit SIP URI there.
-- If calls fail with SIP `500` or auth retry issues, the most common cause is a wrong trunk domain or stale credentials on the LiveKit side.
+Main services:
 
-## Transfer Behavior
+- `gateway` → public API entry point
+- `config` → assistants, SIP configs, tools
+- `analytics` → call records, analysis, webhooks
+- `orchestration` → campaigns, job queue
+- `agent` → worker for backend-managed calls
+- `redis` / celery worker → queue + async jobs
 
-The outbound agent supports SIP REFER transfer.
+Run the backend stack with Docker Compose if you need the API layer:
 
-Default phrases:
+```powershell
+docker compose up -d
+```
+
+## 🌍 Deployment Notes
+
+### Fastest practical setup
+
+- **Frontend**: your own app on Vercel
+- **Backend**: this repo on a VM or multi-service platform
+- **Database**: MongoDB Atlas
+- **Queue/cache**: Redis
+
+### Render
+
+If you deploy the backend stack on Render, you typically need:
+
+- `gateway` as a public web service
+- `config`, `analytics`, `orchestration` as private services
+- `agent` and `celery-worker` as background workers
+- Redis + MongoDB
+
+### Simplest backend hosting
+
+For this repo, one Linux VM running Docker Compose is usually simpler than splitting the microservices across a free-tier PaaS.
+
+## 🔁 Call Transfer
+
+The standalone outbound agent supports SIP REFER transfer.
+
+Typical phrases:
 
 - `transfer me`
 - `transfer me to a live agent`
+- `transfer me to +91...`
 
-Important settings:
+Relevant env:
 
 ```env
 TRANSFER_REQUIRE_CONFIRMATION=true
 DEFAULT_TRANSFER_NUMBER=+91XXXXXXXXXX
 ```
 
-The caller can also request a custom destination number during the call.
+## 🛠️ Automation Scripts
 
-See `transfer_call.md` for transfer-specific notes.
+`scripts/full_api_automation.py` is still available, but it now requires explicit env values instead of baked-in SIP secrets:
 
-## Useful Commands
+```powershell
+$env:AUTOMATION_SIP_DOMAIN='your-sip-domain.sip.vobiz.ai'
+$env:AUTOMATION_SIP_USERNAME='your_sip_username'
+$env:AUTOMATION_SIP_PASSWORD='your_sip_password'
+$env:AUTOMATION_FROM_NUMBER='+91xxxxxxxxxx'
+python scripts/full_api_automation.py
+```
+
+## 🧪 Useful Commands
 
 ```powershell
 python setup_trunk.py
 python agent.py start
 python make_call.py +919876543210
-python make_call.py --to +919876543210 --to +14155550123
 python setup_inbound.py
 python agent_inbound.py start
+docker compose up -d
 ```
 
-## Useful Logs
+## 🚨 Troubleshooting
 
-When the system is healthy, you should see logs like:
+| Problem | Meaning | Fix |
+| --- | --- | --- |
+| SIP `500` | Provider got the INVITE but failed internally | Verify Vobiz trunk domain, auth, KYC, balance, caller ID, routing |
+| `486 Busy Here` | The callee is busy | Retry later |
+| Worker cannot bind to `8081` | Another agent process is already running | Stop the old worker before starting a new one |
+| Call connects but agent says nothing | Wrong provider key or worker issue | Verify provider key and restart the worker |
+| Gemini warns `tool_choice is not supported` | Non-blocking Google realtime limitation | Safe to ignore unless you need tool-calling behavior |
+| Some numbers cannot be called | Trial / provider routing restrictions | Check Vobiz account status and destination permissions |
 
+### Vobiz-specific blockers to watch for
+
+- incomplete KYC
+- trial account restrictions
+- trial number cannot be linked
+- missing outbound trunk credentials
+- outbound route not enabled
+- caller ID not approved on that trunk
+
+## 📈 What “Healthy” Logs Look Like
+
+Good signs in logs:
+
+- `registered worker`
 - `Synced existing outbound trunk from env: ST_...`
 - `Call answered! Agent is now listening.`
-- `user_input_transcribed final=True language=...`
+- `user_input_transcribed final=True ...`
 - `conversation_item_added role=assistant ...`
 
-Those mean:
+These together mean:
 
-- the worker connected to LiveKit
+- LiveKit is connected
 - the SIP leg connected
-- STT heard the caller
-- the assistant generated a reply
+- the caller answered
+- speech was transcribed
+- the model responded
 
-## Troubleshooting
+## 🤝 Contributing
 
-| Problem | Likely cause | Fix |
-| --- | --- | --- |
-| SIP `500` or auth retry error | Wrong trunk domain or stale Vobiz credentials on the LiveKit trunk | Verify `VOBIZ_SIP_DOMAIN`, `VOBIZ_AUTH_ID`, `VOBIZ_AUTH_TOKEN`, caller ID, then run `python setup_trunk.py` |
-| Call rings but never connects | Provider-side routing issue | Check Vobiz routing, number status, and whether your account can call that destination |
-| Call connects but the agent says nothing | OpenAI key missing or worker not running correctly | Verify `OPENAI_API_KEY`, run `python agent.py start`, inspect logs |
-| Call connects but the agent does not respond after you speak | STT language mismatch or stale worker process | Set `OPENAI_STT_LANGUAGE=hi` or `en`, restart the worker, confirm `user_input_transcribed` appears in logs |
-| Wrong number is being called | Fallback env target is being used | Pass a target on the CLI or clear `DEFAULT_OUTBOUND_TARGET` |
-| Inbound call does not reach the agent | Inbound trunk or Primary URI is incomplete | Run `python setup_inbound.py`, set the printed SIP endpoint in Vobiz, start `agent_inbound.py` |
-| Transfer fails | Missing transfer number or provider restriction | Verify `DEFAULT_TRANSFER_NUMBER`, `VOBIZ_SIP_DOMAIN`, and provider SIP REFER support |
-| Some destinations fail on a trial account | Vobiz trial or shared-number restrictions | Test with allowed numbers or upgrade to a dedicated number |
+If you contribute:
 
-## Project Structure
+- keep changes focused
+- avoid committing `.env`
+- update `.env.example` when you add env vars
+- run local checks before committing
 
-```text
-.
-|-- agent.py
-|-- agent_inbound.py
-|-- make_call.py
-|-- setup_trunk.py
-|-- setup_inbound.py
-|-- transfer_call.md
-|-- backend/
-|-- frontend/
-|-- docs/
-`-- scripts/
+Useful local verification:
+
+```powershell
+python -B -m py_compile agent.py setup_trunk.py
+python scripts/test_api_key_auth.py
 ```
 
-## Related Documentation
+## 📦 Cleanup Notes
 
-- `transfer_call.md` for transfer-specific behavior
-- `backend/README.md` for the larger microservices platform
+This repo intentionally uses **one README as the documentation source** now.
 
-## Current Root-Level Behavior
-
-The standalone root flow in this repository currently:
-
-- resolves and syncs the Vobiz outbound trunk from `.env`
-- supports calling arbitrary numbers from the CLI
-- speaks first after answer
-- captures caller speech through `AgentSession` speech events
-- handles Hindi-first conversations and English switching
-
-If you want, this README can also be split into:
-
-- a short landing README
-- a dedicated outbound-only guide
-- a separate inbound deployment guide
+The old markdown docs were removed to keep the project simpler and easier to navigate. The Docusaurus app is retained only as a lightweight site shell and no longer depends on markdown content.

@@ -2,22 +2,6 @@ version: '3.8'
 
 services:
   # ===================
-  # FRONTEND
-  # ===================
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-    container_name: vobiz-frontend
-    ports:
-      - "3000:80"
-    depends_on:
-      - gateway
-    restart: unless-stopped
-    networks:
-      - vobiz-network
-
-  # ===================
   # API GATEWAY
   # ===================
   gateway:

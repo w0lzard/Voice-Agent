@@ -4,7 +4,7 @@ import type * as Preset from '@docusaurus/preset-classic';
 
 const config: Config = {
   title: 'Voice Agent Platform',
-  tagline: 'Open Source Voice AI for Everyone',
+  tagline: 'Voice calling agents with LiveKit, Vobiz, Gemini, and OpenAI',
   favicon: 'img/favicon.ico',
 
   future: {
@@ -28,39 +28,14 @@ const config: Config = {
     [
       'classic',
       {
-        docs: {
-          sidebarPath: './sidebars.ts',
-          editUrl:
-            'https://github.com/Piyush-sahoo/Voice-AI-Platform/tree/main/docs/',
-        },
-        blog: false, // Disable blog
+        docs: false,
+        blog: false,
         theme: {
           customCss: './src/css/custom.css',
         },
       } satisfies Preset.Options,
     ],
   ],
-
-  plugins: [
-    [
-      'docusaurus-plugin-openapi-docs',
-      {
-        id: "api",
-        docsPluginId: "classic",
-        config: {
-          voiceai: {
-            specPath: "static/openapi.json",
-            outputDir: "docs/api",
-            sidebarOptions: {
-              groupPathsBy: "tag",
-            },
-          } satisfies any,
-        } satisfies any,
-      },
-    ],
-  ],
-
-  themes: ["docusaurus-theme-openapi-docs"],
 
   themeConfig: {
     image: 'img/social-card.png',
@@ -76,14 +51,13 @@ const config: Config = {
       },
       items: [
         {
-          type: 'docSidebar',
-          sidebarId: 'tutorialSidebar',
+          to: '/',
+          label: 'Overview',
           position: 'left',
-          label: 'Docs',
         },
         {
-          to: '/docs/api',
-          label: 'API',
+          href: 'https://github.com/Piyush-sahoo/Voice-AI-Platform#readme',
+          label: 'README',
           position: 'left',
         },
         {
@@ -97,15 +71,15 @@ const config: Config = {
       style: 'dark',
       links: [
         {
-          title: 'Documentation',
+          title: 'Project',
           items: [
             {
-              label: 'Getting Started',
-              to: '/docs/intro',
+              label: 'README',
+              href: 'https://github.com/Piyush-sahoo/Voice-AI-Platform#readme',
             },
             {
-              label: 'API Reference',
-              to: '/docs/api',
+              label: 'Repository',
+              href: 'https://github.com/Piyush-sahoo/Voice-AI-Platform',
             },
           ],
         },
@@ -113,26 +87,13 @@ const config: Config = {
           title: 'Community',
           items: [
             {
-              label: 'GitHub',
-              href: 'https://github.com/Piyush-sahoo/Voice-AI-Platform',
-            },
-            {
               label: 'Issues',
               href: 'https://github.com/Piyush-sahoo/Voice-AI-Platform/issues',
             },
           ],
         },
-        {
-          title: 'More',
-          items: [
-            {
-              label: 'Contributing',
-              href: 'https://github.com/Piyush-sahoo/Voice-AI-Platform/blob/main/CONTRIBUTING.md',
-            },
-          ],
-        },
       ],
-      copyright: `Copyright © ${new Date().getFullYear()} Voice Agent Platform. Built with Docusaurus.`,
+      copyright: `Copyright © ${new Date().getFullYear()} Voice Agent Platform.`,
     },
     prism: {
       theme: prismThemes.github,

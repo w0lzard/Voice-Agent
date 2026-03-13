@@ -2,6 +2,7 @@
 API Gateway - Main entry point for the Voice AI Platform.
 Routes requests to microservices, handles auth, and CORS.
 """
+import os
 import logging
 from contextlib import asynccontextmanager
 
@@ -19,6 +20,13 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger("gateway")
+
+
+def _cors_allow_origins() -> list[str]:
+    raw_origins = os.getenv("CORS_ALLOW_ORIGINS", "*").strip()
+    if raw_origins == "*":
+        return ["*"]
+    return [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
 
 
 def create_app() -> FastAPI:
@@ -60,7 +68,7 @@ def create_app() -> FastAPI:
     # Add CORS
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=_cors_allow_origins(),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
