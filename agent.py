@@ -13,6 +13,7 @@ from livekit.agents.voice.room_io import RoomOptions, AudioInputOptions
 from livekit.plugins import (
     openai,
     deepgram,
+    google,
     noise_cancellation,
     silero,
 )
@@ -101,6 +102,18 @@ def _get_default_language() -> str:
 
 def _use_realtime_audio() -> bool:
     return _get_bool_env("OPENAI_REALTIME_AUDIO", True)
+
+
+def _get_realtime_provider() -> str:
+    return os.getenv("REALTIME_PROVIDER", "openai").strip().lower() or "openai"
+
+
+def _get_realtime_language_code() -> str:
+    language = _get_default_language()
+    return {
+        "hi": "hi-IN",
+        "en": "en-US",
+    }.get(language, language)
 
 
 def _repair_mojibake(value: str | None) -> str | None:
@@ -346,7 +359,24 @@ def _build_stt():
 
 
 def _build_realtime_llm():
-    """Configure OpenAI realtime audio for lower-latency voice output."""
+    """Configure realtime audio provider for lower-latency voice output."""
+    if _get_realtime_provider() == "google":
+        model = os.getenv("GOOGLE_REALTIME_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
+        voice = os.getenv("GOOGLE_REALTIME_VOICE", "Puck")
+        logger.info(
+            "Using Gemini Live audio (model=%s voice=%s language=%s)",
+            model,
+            voice,
+            _get_realtime_language_code(),
+        )
+        return google.realtime.RealtimeModel(
+            model=model,
+            voice=voice,
+            language=_get_realtime_language_code(),
+            temperature=_get_float_env("OPENAI_REALTIME_TEMPERATURE", 0.8),
+            instructions=_build_agent_instructions(),
+        )
+
     model = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime")
     voice = os.getenv("OPENAI_REALTIME_VOICE", "marin")
     speed = _get_float_env("OPENAI_REALTIME_SPEED", 1.0)
@@ -560,24 +590,17 @@ class TransferFunctions(llm.ToolContext):
             return f"Error executing transfer: {e}"
 
 
-class OutboundAssistant(Agent):
-
-    """
-    An AI agent tailored for outbound calls.
-    Attempts to be helpful and concise.
-    """
-    def __init__(self) -> None:
-        agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
-        company = os.getenv("AGENT_COMPANY_NAME", "real estate company")
-        default_language = os.getenv("AGENT_DEFAULT_LANGUAGE", "hi").strip().lower()
-        language_instruction = (
-            "Primary language is Hindi. Reply in simple Hindi by default. "
-            "If the caller speaks English, switch to English. If mixed, use Hinglish."
-            if default_language == "hi"
-            else "Primary language is English. If the caller speaks Hindi, switch to Hindi."
-        )
-        super().__init__(
-            instructions=f"""
+def _build_agent_instructions() -> str:
+    agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
+    company = os.getenv("AGENT_COMPANY_NAME", "real estate company")
+    default_language = os.getenv("AGENT_DEFAULT_LANGUAGE", "hi").strip().lower()
+    language_instruction = (
+        "Primary language is Hindi. Reply in simple Hindi by default. "
+        "If the caller speaks English, switch to English. If mixed, use Hinglish."
+        if default_language == "hi"
+        else "Primary language is English. If the caller speaks Hindi, switch to Hindi."
+    )
+    return f"""
             You are {agent_name}, a helpful and professional voice agent from {company}.
             {language_instruction}
             
@@ -595,7 +618,16 @@ class OutboundAssistant(Agent):
             8. If transfer intent is unclear, ask a clarification question instead of calling transfer_call.
             9. Never call transfer_call on one-word or noisy utterances.
             """
-        )
+
+
+class OutboundAssistant(Agent):
+
+    """
+    An AI agent tailored for outbound calls.
+    Attempts to be helpful and concise.
+    """
+    def __init__(self) -> None:
+        super().__init__(instructions=_build_agent_instructions())
 
 
 def prewarm(proc: agents.JobProcess) -> None:
@@ -612,14 +644,14 @@ async def _speak_scripted_line(
 ) -> None:
     """Play a scripted line using the active speech pipeline."""
     if realtime_audio:
-        speech_handle = session.generate_reply(
-            instructions=(
-                f'Say exactly this line and nothing else: "{text}"'
-            ),
-            tool_choice="none",
-            allow_interruptions=True,
-            input_modality="text",
-        )
+        reply_kwargs = {
+            "instructions": f'Say exactly this line and nothing else: "{text}"',
+            "allow_interruptions": True,
+            "input_modality": "text",
+        }
+        if _get_realtime_provider() != "google":
+            reply_kwargs["tool_choice"] = "none"
+        speech_handle = session.generate_reply(**reply_kwargs)
         await speech_handle
         return
 
@@ -642,18 +674,26 @@ async def entrypoint(ctx: agents.JobContext):
     """
     logger.info(f"Connecting to room: {ctx.room.name}")
 
-    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not openai_key:
-        logger.error("OPENAI_API_KEY is missing in environment. Cannot start outbound conversation.")
-        ctx.shutdown()
-        return
-    if openai_key.startswith("sk-or-v1"):
-        logger.error(
-            "Detected OpenRouter key in OPENAI_API_KEY. "
-            "Please set a real OpenAI key (sk-... / sk-proj-...) in .env."
-        )
-        ctx.shutdown()
-        return
+    provider = _get_realtime_provider()
+    if _use_realtime_audio() and provider == "google":
+        google_key = os.getenv("GOOGLE_API_KEY", "").strip()
+        if not google_key:
+            logger.error("GOOGLE_API_KEY is missing in environment. Cannot start Gemini Live conversation.")
+            ctx.shutdown()
+            return
+    else:
+        openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+        if not openai_key:
+            logger.error("OPENAI_API_KEY is missing in environment. Cannot start outbound conversation.")
+            ctx.shutdown()
+            return
+        if openai_key.startswith("sk-or-v1"):
+            logger.error(
+                "Detected OpenRouter key in OPENAI_API_KEY. "
+                "Please set a real OpenAI key (sk-... / sk-proj-...) in .env."
+            )
+            ctx.shutdown()
+            return
     
     # parse the phone number from the metadata sent by the dispatch script
     phone_number = None

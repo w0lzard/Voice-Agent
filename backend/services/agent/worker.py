@@ -267,13 +267,14 @@ async def entrypoint(ctx: agents.JobContext):
     temperature = 0.8
     
     # Voice configuration (user-selectable models)
+    realtime_provider = os.getenv("REALTIME_PROVIDER", "openai").strip().lower() or "openai"
     voice_config = {
         "mode": "realtime",  # realtime or pipeline
-        "voice_id": config.OPENAI_REALTIME_VOICE,
+        "voice_id": os.getenv("GOOGLE_REALTIME_VOICE", "Puck") if realtime_provider == "google" else config.OPENAI_REALTIME_VOICE,
         "temperature": 0.8,
         # Realtime mode
-        "realtime_provider": "openai",
-        "realtime_model": "gpt-4o-realtime-preview",
+        "realtime_provider": realtime_provider,
+        "realtime_model": os.getenv("GOOGLE_REALTIME_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025") if realtime_provider == "google" else os.getenv("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview"),
         # Pipeline mode (STT → LLM → TTS)
         "stt_provider": "deepgram",
         "stt_model": "nova-2",
@@ -347,6 +348,11 @@ async def entrypoint(ctx: agents.JobContext):
         logger.info(f"Realtime: provider={voice_config.get('realtime_provider')}, voice={voice_config.get('voice_id')}")
         session = AgentSession(
             llm=get_realtime_model(voice_config),
+            min_endpointing_delay=0.5,
+            max_endpointing_delay=1.2,
+            allow_interruptions=True,
+            min_interruption_duration=0.5,
+            false_interruption_timeout=0.6,
         )
 
     if assistant_id:
@@ -471,7 +477,6 @@ async def entrypoint(ctx: agents.JobContext):
         agent=OutboundAssistant(custom_instructions),
         room_input_options=RoomInputOptions(
             noise_cancellation=noise_cancellation.BVCTelephony(),
-            close_on_disconnect=False,  # Keep session alive for proper cleanup
         ),
     )
 
@@ -527,7 +532,7 @@ async def entrypoint(ctx: agents.JobContext):
                     sip_trunk_id=sip_trunk_id,
                     sip_call_to=phone_number,
                     participant_identity=f"sip_{phone_number}",
-                    wait_until_answered=False,  # Don't block - let the call connect async
+                    wait_until_answered=True,  # Wait for pickup before sending audio
                 )
             )
             logger.info("Call answered! Agent is now listening.")

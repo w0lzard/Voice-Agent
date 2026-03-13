@@ -5,7 +5,7 @@ Supports multiple providers for user-selectable voice AI configuration.
 import logging
 import os
 from typing import Any, Optional
-from openai.types.beta.realtime.session import TurnDetection
+from openai.types.beta.realtime.session import TurnDetection, InputAudioTranscription
 
 logger = logging.getLogger("model-factory")
 
@@ -173,20 +173,19 @@ def get_realtime_model(voice_config: dict) -> Any:
             voice=voice_id,
             temperature=temperature,
             modalities=["text", "audio"],
-            input_audio_transcription={"model": "whisper-1"},
+            input_audio_transcription=InputAudioTranscription(model="whisper-1"),
             turn_detection=TurnDetection(
                 type="server_vad",
-                threshold=0.5,
-                prefix_padding_ms=300,
-                silence_duration_ms=500,
+                threshold=0.55,
+                prefix_padding_ms=400,
+                silence_duration_ms=800,
                 create_response=True,
-                interrupt_response=True,
             ),
         )
     
     elif provider == "google" and AVAILABLE_PLUGINS["google"]:
         from livekit.plugins import google
-        return google.RealtimeModel(
+        return google.realtime.RealtimeModel(
             model=model,
             voice=voice_id,
         )
