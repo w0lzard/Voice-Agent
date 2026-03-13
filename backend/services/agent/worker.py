@@ -365,19 +365,11 @@ async def entrypoint(ctx: agents.JobContext):
     realtime_provider = os.getenv("REALTIME_PROVIDER", "openai").strip().lower() or "openai"
     voice_config = {
         "mode": "realtime",  # realtime or pipeline
-<<<<<<< HEAD
         "voice_id": os.getenv("GOOGLE_REALTIME_VOICE", "Puck") if realtime_provider == "google" else config.OPENAI_REALTIME_VOICE,
         "temperature": 0.8,
         # Realtime mode
         "realtime_provider": realtime_provider,
-        "realtime_model": os.getenv("GOOGLE_REALTIME_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025") if realtime_provider == "google" else os.getenv("OPENAI_REALTIME_MODEL", "gpt-4o-realtime-preview"),
-=======
-        "voice_id": os.getenv("GOOGLE_REALTIME_VOICE", "Puck") if os.getenv("REALTIME_PROVIDER", "openai").strip().lower() == "google" else config.OPENAI_REALTIME_VOICE,
-        "temperature": 0.8,
-        # Realtime mode
-        "realtime_provider": os.getenv("REALTIME_PROVIDER", "openai").strip().lower(),
-        "realtime_model": os.getenv("GOOGLE_REALTIME_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025") if os.getenv("REALTIME_PROVIDER", "openai").strip().lower() == "google" else os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-mini"),
->>>>>>> 242873f8d3b37699d23ce567dadb7d39587d30bf
+        "realtime_model": os.getenv("GOOGLE_REALTIME_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025") if realtime_provider == "google" else os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-mini"),
         # Pipeline mode (STT → LLM → TTS)
         "stt_provider": "deepgram",
         "stt_model": "nova-2",

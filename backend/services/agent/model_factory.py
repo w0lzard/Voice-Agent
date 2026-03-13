@@ -189,10 +189,6 @@ def get_realtime_model(voice_config: dict) -> Any:
         )
     
     elif provider == "google" and AVAILABLE_PLUGINS["google"]:
-<<<<<<< HEAD
-        from livekit.plugins import google
-=======
->>>>>>> 242873f8d3b37699d23ce567dadb7d39587d30bf
         return google.realtime.RealtimeModel(
             model=model,
             voice=voice_id,

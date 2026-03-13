@@ -1,14 +1,7 @@
-<<<<<<< HEAD
-livekit-agents
-livekit-plugins-openai
-livekit-plugins-google
-livekit-plugins-deepgram
-=======
 livekit-agents==1.4.4
 livekit-plugins-openai==1.4.4
 livekit-plugins-google==1.4.4
 livekit-plugins-deepgram==1.4.4
->>>>>>> 242873f8d3b37699d23ce567dadb7d39587d30bf
 livekit-plugins-noise-cancellation
 livekit-plugins-silero==1.4.4
 livekit-plugins-cartesia==1.4.4
