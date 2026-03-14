@@ -407,13 +407,14 @@ def _build_realtime_llm():
                     start_of_speech_sensitivity=google_genai_types.StartSensitivity.START_SENSITIVITY_HIGH,
                     end_of_speech_sensitivity=google_genai_types.EndSensitivity.END_SENSITIVITY_HIGH,
                     prefix_padding_ms=20,
-                    # 300ms silence → Gemini responds ~2x faster than 500ms default
-                    silence_duration_ms=_get_int_env("GEMINI_SILENCE_DURATION_MS", 300),
+                    # 200ms silence threshold — minimum practical value for PSTN
+                    silence_duration_ms=_get_int_env("GEMINI_SILENCE_DURATION_MS", 200),
                 ),
+                # TURN_INCLUDES_ALL_INPUT: Gemini sees the full audio stream (speech +
+                # silence) and uses it to decide when to respond. Using
+                # TURN_INCLUDES_ONLY_ACTIVITY caused background PSTN noise to keep
+                # the activity window open indefinitely, worsening latency.
                 activity_handling=google_genai_types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
-                # Only include voiced speech in the turn — ignores background noise/silence
-                # This prevents Gemini's semantic turn detection from waiting too long
-                turn_coverage=google_genai_types.TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
             )
             # Enable transcription of user audio so logs/events carry full text
             extra_kwargs["input_audio_transcription"] = google_genai_types.AudioTranscriptionConfig()
@@ -653,25 +654,26 @@ def _build_agent_instructions() -> str:
             "Use natural spoken Hindi — not formal written Hindi. Short sentences only."
         )
         filler_rule = (
-            'EVERY reply MUST begin with a spoken filler. No exceptions.\n'
+            'Every REPLY to the user must begin with a spoken filler. (The opening greeting is exempt.)\n'
             '  • Short answer → "Haan ji," / "Achha," / "Bilkul," / "Theek hai,"\n'
-            '  • Surprised/excited → "Wah," / "Accha!"\n'
-            '  • Thinking/processing → start with "Hmm..." or "Ek second..." THEN answer\n'
+            '  • Thinking/processing → "Hmm..." or "Ek second..." THEN answer\n'
             '  • Confusion → "Sorry, ek baar phir se bata sakte hain?"\n'
             '  • Agreeing → "Ji bilkul," / "Haan, zaroor,"\n'
-            'BAD: "Toh aap kya chahte hain?" — no filler\n'
-            'GOOD: "Achha, toh aap kya chahte hain?" — has filler'
+            'BAD reply: "Toh aap kya chahte hain?" — no filler\n'
+            'GOOD reply: "Achha, toh aap kya chahte hain?" — has filler\n'
+            'RESPOND IMMEDIATELY when the user pauses — do not wait to see if they continue.'
         )
     else:
         language_rule = "Speak English by default. Switch to Hindi or Hinglish if the caller uses it. Short sentences only."
         filler_rule = (
-            'EVERY reply MUST begin with a spoken filler. No exceptions.\n'
+            'Every REPLY to the user must begin with a spoken filler. (The opening greeting is exempt.)\n'
             '  • Short answer → "Right," / "Got it," / "Sure," / "I see,"\n'
             '  • Thinking → "Hmm..." or "One moment..." THEN answer\n'
             '  • Confusion → "Sorry, could you say that again?"\n'
             '  • Agreeing → "Absolutely," / "Of course,"\n'
-            'BAD: "Are you looking to buy or rent?" — no filler\n'
-            'GOOD: "Right, are you looking to buy or rent?" — has filler'
+            'BAD reply: "Are you looking to buy or rent?" — no filler\n'
+            'GOOD reply: "Right, are you looking to buy or rent?" — has filler\n'
+            'RESPOND IMMEDIATELY when the user pauses — do not wait to see if they continue.'
         )
 
     return f"""You are {agent_name}, a warm and friendly human voice assistant from {company}.
@@ -729,8 +731,14 @@ async def _speak_scripted_line(
     """
     if realtime_audio:
         reply_kwargs: dict = {
-            # Explicit word-for-word instruction gets closer to verbatim output from Gemini
-            "instructions": f'Speak these words verbatim, nothing added or removed: {text}',
+            # Use natural-language instruction rather than verbatim script.
+            # "Verbatim" instructions fight the system-prompt filler rule causing
+            # Gemini to add "Achha," prefix and then paraphrase the rest.
+            # Instead, instruct what content to convey — Gemini speaks it naturally.
+            "instructions": (
+                f"This is the opening of the call — NOT a reply to the user. "
+                f"Deliver this greeting naturally without any leading filler word: {text}"
+            ),
             "allow_interruptions": True,
             "input_modality": "text",
         }
