@@ -936,6 +936,7 @@ async def entrypoint(ctx: agents.JobContext):
         # the INSTANT the SIP caller joins — before wait_until_answered even
         # returns from the API, saving the API-response round-trip delay.
         _greeting_triggered = False
+        _greeting_task: asyncio.Task | None = None
 
         async def _send_greeting_and_start_reprompt() -> None:
             nonlocal last_user_speech_at, reprompt_task
@@ -965,14 +966,14 @@ async def entrypoint(ctx: agents.JobContext):
             reprompt_task = asyncio.create_task(_reprompt_if_no_speech())
 
         def _on_sip_participant_connected(participant) -> None:
-            nonlocal _greeting_triggered
+            nonlocal _greeting_triggered, _greeting_task
             if _greeting_triggered:
                 return
             if not participant.identity.startswith("sip_"):
                 return
             _greeting_triggered = True
             logger.info("SIP participant connected — starting greeting immediately.")
-            asyncio.ensure_future(_send_greeting_and_start_reprompt())
+            _greeting_task = asyncio.ensure_future(_send_greeting_and_start_reprompt())
 
         ctx.room.on("participant_connected", _on_sip_participant_connected)
 
@@ -995,6 +996,10 @@ async def entrypoint(ctx: agents.JobContext):
 
         except Exception as e:
             logger.error(f"Failed to place outbound call: {e}")
+            if _greeting_task and not _greeting_task.done():
+                _greeting_task.cancel()
+            if reprompt_task and not reprompt_task.done():
+                reprompt_task.cancel()
             ctx.shutdown()
     else:
         # Inbound / web call
