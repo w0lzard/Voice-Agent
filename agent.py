@@ -407,9 +407,13 @@ def _build_realtime_llm():
                     start_of_speech_sensitivity=google_genai_types.StartSensitivity.START_SENSITIVITY_HIGH,
                     end_of_speech_sensitivity=google_genai_types.EndSensitivity.END_SENSITIVITY_HIGH,
                     prefix_padding_ms=20,
-                    silence_duration_ms=_get_int_env("GEMINI_SILENCE_DURATION_MS", 500),
+                    # 300ms silence → Gemini responds ~2x faster than 500ms default
+                    silence_duration_ms=_get_int_env("GEMINI_SILENCE_DURATION_MS", 300),
                 ),
                 activity_handling=google_genai_types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+                # Only include voiced speech in the turn — ignores background noise/silence
+                # This prevents Gemini's semantic turn detection from waiting too long
+                turn_coverage=google_genai_types.TurnCoverage.TURN_INCLUDES_ONLY_ACTIVITY,
             )
             # Enable transcription of user audio so logs/events carry full text
             extra_kwargs["input_audio_transcription"] = google_genai_types.AudioTranscriptionConfig()
@@ -912,14 +916,43 @@ async def entrypoint(ctx: agents.JobContext):
         # first_message and trunk_id are already resolved (done concurrently with session.start)
         trunk_id = resolved_trunk_id
         logger.info(f"Initiating outbound SIP call to {phone_number}...")
-        try:
-            if not _is_trunk_id(trunk_id):
-                logger.error(
-                    "No valid outbound trunk ID found. Set OUTBOUND_TRUNK_ID=ST_xxx in env."
-                )
-                ctx.shutdown()
-                return
 
+        if not _is_trunk_id(trunk_id):
+            logger.error(
+                "No valid outbound trunk ID found. Set OUTBOUND_TRUNK_ID=ST_xxx in env."
+            )
+            ctx.shutdown()
+            return
+
+        # Hook the greeting to the participant_connected room event so it fires
+        # the INSTANT the SIP caller joins — before wait_until_answered even
+        # returns from the API, saving the API-response round-trip delay.
+        _greeting_triggered = False
+
+        async def _send_greeting_and_start_reprompt() -> None:
+            nonlocal last_user_speech_at, reprompt_task
+            try:
+                await _speak_scripted_line(session, text=first_message, realtime_audio=realtime_audio)
+                logger.info("Initial greeting sent.")
+            except Exception as greet_error:
+                logger.warning(f"Greeting error: {greet_error}")
+            # Reset silence timer so reprompt is measured from greeting end, not entrypoint start.
+            last_user_speech_at = time.time()
+            reprompt_task = asyncio.create_task(_reprompt_if_no_speech())
+
+        def _on_sip_participant_connected(participant) -> None:
+            nonlocal _greeting_triggered
+            if _greeting_triggered:
+                return
+            if not participant.identity.startswith("sip_"):
+                return
+            _greeting_triggered = True
+            logger.info("SIP participant connected — starting greeting immediately.")
+            asyncio.ensure_future(_send_greeting_and_start_reprompt())
+
+        ctx.room.on("participant_connected", _on_sip_participant_connected)
+
+        try:
             await ctx.api.sip.create_sip_participant(
                 api.CreateSIPParticipantRequest(
                     room_name=ctx.room.name,
@@ -929,20 +962,12 @@ async def entrypoint(ctx: agents.JobContext):
                     wait_until_answered=True,
                 )
             )
-            logger.info("Call answered! Sending greeting immediately...")
-
-            try:
-                await _speak_scripted_line(session, text=first_message, realtime_audio=realtime_audio)
-                logger.info("Initial greeting sent.")
-                # CRITICAL: reset the silence timer AFTER greeting ends, so the
-                # reprompt (NO_SPEECH_REPROMPT_SEC) is measured from this moment,
-                # not from entrypoint start (which is ~8s earlier).
-                last_user_speech_at = time.time()
-                reprompt_task = asyncio.create_task(_reprompt_if_no_speech())
-            except Exception as greet_error:
-                logger.warning(f"Failed to send initial greeting: {greet_error}")
-                last_user_speech_at = time.time()
-                reprompt_task = asyncio.create_task(_reprompt_if_no_speech())
+            logger.info("Call confirmed answered.")
+            # Safety: if participant_connected did not fire (edge case), trigger greeting now.
+            if not _greeting_triggered:
+                _greeting_triggered = True
+                logger.warning("participant_connected did not fire; triggering greeting as fallback.")
+                asyncio.ensure_future(_send_greeting_and_start_reprompt())
 
         except Exception as e:
             logger.error(f"Failed to place outbound call: {e}")
