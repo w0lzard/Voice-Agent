@@ -1,0 +1,164 @@
+/**
+ * Catch-all proxy: /api/v1/* → Railway Gateway /api/*
+ *
+ * Responsibilities:
+ *  1. Strip the /v1 prefix before forwarding to the backend
+ *  2. Normalize response format to { ok, data, ... } that the frontend expects
+ *  3. Transform auth responses (tokens.access_token → token)
+ *  4. Transform /calls/start body shape
+ *  5. Return graceful stubs for endpoints not yet in the backend
+ */
+import { NextResponse } from 'next/server';
+
+// Set GATEWAY_URL on Vercel (server-side only — never exposed to browser)
+const GATEWAY_URL = (
+  process.env.GATEWAY_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  'http://localhost:8000'
+).replace(/\/+$/, '');
+
+// ─── Stub responses for unimplemented backend endpoints ──────────────────────
+const EXACT_STUBS = {
+  'GET /wallet': {
+    ok: true,
+    data: { balance: 0, currency: 'USD', transactions: [], daily_spend: [] },
+  },
+  'GET /metrics': {
+    ok: true,
+    data: { total_calls: 0, active_calls: 0, success_rate: 0, total_minutes: 0, lead_conversion: 0 },
+  },
+  'GET /stats': { ok: true, data: {} },
+  'GET /system/logs': { ok: true, data: [] },
+  'GET /uploads': { ok: true, data: [] },
+  'DELETE /auth/account': { ok: true },
+  'POST /auth/avatar': { ok: true, data: {} },
+  'POST /calls/upload-numbers': { ok: true, data: { uploaded: 0 } },
+};
+
+// ─── Pattern stubs (checked when no exact stub matches) ──────────────────────
+const PATTERN_STUBS = [
+  { method: 'GET',    pattern: /^\/clients/,                  response: { ok: true, data: [], total: 0 } },
+  { method: 'GET',    pattern: /^\/documents/,                response: { ok: true, data: [] } },
+  { method: 'POST',   pattern: /^\/documents/,                response: { ok: true, data: {} } },
+  { method: 'DELETE', pattern: /^\/documents\//,              response: { ok: true } },
+  { method: 'GET',    pattern: /^\/knowledge-bases/,          response: { ok: true, data: [] } },
+  { method: 'POST',   pattern: /^\/knowledge-bases/,          response: { ok: true, data: {} } },
+  { method: 'PUT',    pattern: /^\/knowledge-bases\//,        response: { ok: true, data: {} } },
+  { method: 'DELETE', pattern: /^\/knowledge-bases\//,        response: { ok: true } },
+  { method: 'GET',    pattern: /^\/calls\/[^/]+\/transcript$/, response: { ok: true, data: null } },
+  { method: 'GET',    pattern: /^\/calls\/[^/]+\/recordings$/, response: { ok: true, data: [] } },
+  { method: 'PUT',    pattern: /^\/auth\/(profile|password)$/, response: { ok: true } },
+];
+
+// ─── Response normalisation ───────────────────────────────────────────────────
+function normalise(path, data) {
+  // Login / signup: map tokens.access_token → token
+  if ((path === '/auth/login' || path === '/auth/signup') && data?.tokens) {
+    return { ok: true, token: data.tokens.access_token, user: data.user };
+  }
+
+  // /auth/me: FastAPI returns the user object directly
+  if (path === '/auth/me' && data?.user_id) {
+    return { ok: true, user: data };
+  }
+
+  // Paginated lists: { items, total } → { ok, data, total }
+  if (data && Array.isArray(data.items)) {
+    return { ok: true, data: data.items, total: data.total ?? data.items.length };
+  }
+
+  // Already wrapped by backend
+  if (data && data.ok !== undefined) return data;
+
+  return { ok: true, data };
+}
+
+// ─── Path & body mapping ──────────────────────────────────────────────────────
+function mapRequest(path, method) {
+  // Frontend: POST /calls/start { campaignId, phoneNumber, language }
+  // Backend:  POST /calls       { phone_number, language, campaign_id }
+  if (path === '/calls/start' && method === 'POST') {
+    return { backendPath: '/calls', transformBody: true };
+  }
+  return { backendPath: path, transformBody: false };
+}
+
+// ─── Main handler ─────────────────────────────────────────────────────────────
+async function handleRequest(request, { params }, method) {
+  const pathParts = (await params).path ?? [];
+  const path = '/' + pathParts.join('/');
+
+  // 1. Exact stub
+  const exactKey = `${method} ${path}`;
+  if (EXACT_STUBS[exactKey]) return NextResponse.json(EXACT_STUBS[exactKey]);
+
+  // 2. Pattern stub
+  for (const s of PATTERN_STUBS) {
+    if (s.method === method && s.pattern.test(path)) {
+      return NextResponse.json(s.response);
+    }
+  }
+
+  // 3. Forward to Railway Gateway
+  const { backendPath, transformBody } = mapRequest(path, method);
+  const searchParams = new URL(request.url).searchParams.toString();
+  const backendUrl = `${GATEWAY_URL}/api${backendPath}${searchParams ? '?' + searchParams : ''}`;
+
+  const headers = {};
+  const auth = request.headers.get('authorization');
+  if (auth) headers['Authorization'] = auth;
+
+  const fetchOptions = { method, headers };
+
+  if (['POST', 'PUT', 'PATCH'].includes(method)) {
+    const ct = request.headers.get('content-type') || '';
+
+    if (ct.includes('multipart/form-data')) {
+      // Let fetch set the boundary automatically
+      fetchOptions.body = await request.formData();
+    } else if (ct.includes('text/csv')) {
+      headers['Content-Type'] = 'text/csv';
+      fetchOptions.body = await request.text();
+    } else {
+      headers['Content-Type'] = 'application/json';
+      let body = {};
+      try { body = await request.json(); } catch { /* empty body */ }
+
+      if (transformBody) {
+        // /calls/start → /calls body shape
+        body = {
+          phone_number: body.phoneNumber ?? body.phone_number,
+          language: body.language,
+          campaign_id: body.campaignId ?? body.campaign_id,
+        };
+      }
+      fetchOptions.body = JSON.stringify(body);
+    }
+  }
+
+  try {
+    const res = await fetch(backendUrl, fetchOptions);
+    let data = {};
+    try { data = await res.json(); } catch { /* non-JSON body */ }
+
+    if (!res.ok) {
+      return NextResponse.json(
+        { ok: false, error: data.detail ?? data.error ?? 'Request failed' },
+        { status: res.status }
+      );
+    }
+
+    return NextResponse.json(normalise(path, data));
+  } catch {
+    return NextResponse.json(
+      { ok: false, error: 'Failed to connect to backend. Check GATEWAY_URL.' },
+      { status: 502 }
+    );
+  }
+}
+
+export const GET    = (req, ctx) => handleRequest(req, ctx, 'GET');
+export const POST   = (req, ctx) => handleRequest(req, ctx, 'POST');
+export const PUT    = (req, ctx) => handleRequest(req, ctx, 'PUT');
+export const DELETE = (req, ctx) => handleRequest(req, ctx, 'DELETE');
+export const PATCH  = (req, ctx) => handleRequest(req, ctx, 'PATCH');
