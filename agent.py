@@ -939,11 +939,27 @@ async def entrypoint(ctx: agents.JobContext):
 
         async def _send_greeting_and_start_reprompt() -> None:
             nonlocal last_user_speech_at, reprompt_task
-            try:
-                await _speak_scripted_line(session, text=first_message, realtime_audio=realtime_audio)
-                logger.info("Initial greeting sent.")
-            except Exception as greet_error:
-                logger.warning(f"Greeting error: {greet_error}")
+            # Gemini WebSocket may still be establishing when participant_connected fires
+            # (fast calls connect in <3s, Gemini needs ~2-4s). Retry with backoff so the
+            # greeting is delivered as soon as Gemini is ready.
+            _max_attempts = 3
+            for _attempt in range(_max_attempts):
+                try:
+                    await _speak_scripted_line(session, text=first_message, realtime_audio=realtime_audio)
+                    logger.info("Initial greeting sent.")
+                    break
+                except Exception as greet_error:
+                    _err = str(greet_error).lower()
+                    if _attempt < _max_attempts - 1 and ("timed out" in _err or "timeout" in _err):
+                        _wait = 1.5 * (_attempt + 1)
+                        logger.warning(
+                            "Greeting timed out (Gemini not ready yet), "
+                            f"retrying in {_wait:.1f}s... (attempt {_attempt + 1}/{_max_attempts})"
+                        )
+                        await asyncio.sleep(_wait)
+                    else:
+                        logger.warning(f"Greeting failed: {greet_error}")
+                        break
             # Reset silence timer so reprompt is measured from greeting end, not entrypoint start.
             last_user_speech_at = time.time()
             reprompt_task = asyncio.create_task(_reprompt_if_no_speech())
