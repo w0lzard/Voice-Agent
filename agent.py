@@ -20,6 +20,12 @@ from livekit.plugins import (
 from livekit.agents import llm
 from typing import Optional
 
+try:
+    from google.genai import types as google_genai_types
+    _HAS_GOOGLE_GENAI_TYPES = True
+except ImportError:
+    _HAS_GOOGLE_GENAI_TYPES = False
+
 # Load environment variables
 def load_environment() -> None:
     """Load env files with project-local values taking precedence."""
@@ -391,12 +397,32 @@ def _build_realtime_llm():
             voice,
             _get_realtime_language_code(),
         )
+        extra_kwargs: dict = {}
+        if _HAS_GOOGLE_GENAI_TYPES:
+            # HIGH end-of-speech sensitivity + shorter silence window cuts Gemini's
+            # turn-detection latency from ~7s down to ~1-2s.
+            extra_kwargs["realtime_input_config"] = google_genai_types.RealtimeInputConfig(
+                automatic_activity_detection=google_genai_types.AutomaticActivityDetection(
+                    disabled=False,
+                    start_of_speech_sensitivity=google_genai_types.StartSensitivity.START_SENSITIVITY_HIGH,
+                    end_of_speech_sensitivity=google_genai_types.EndSensitivity.END_SENSITIVITY_HIGH,
+                    prefix_padding_ms=20,
+                    silence_duration_ms=_get_int_env("GEMINI_SILENCE_DURATION_MS", 500),
+                ),
+                activity_handling=google_genai_types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+            )
+            # Enable transcription of user audio so logs/events carry full text
+            extra_kwargs["input_audio_transcription"] = google_genai_types.AudioTranscriptionConfig()
+            # Affective dialog makes Gemini mirror caller's emotional tone naturally
+            extra_kwargs["enable_affective_dialog"] = True
+
         return google.realtime.RealtimeModel(
             model=model,
             voice=voice,
             language=_get_realtime_language_code(),
             temperature=_get_float_env("OPENAI_REALTIME_TEMPERATURE", 0.7),
             instructions=_build_agent_instructions(),
+            **extra_kwargs,
         )
 
     model = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime")
@@ -620,37 +646,52 @@ def _build_agent_instructions() -> str:
     if default_language == "hi":
         language_rule = (
             "Speak Hindi by default. Switch to English or Hinglish if the caller uses it. "
-            "Use natural spoken Hindi — not formal written Hindi."
+            "Use natural spoken Hindi — not formal written Hindi. Short sentences only."
         )
-        opener_examples = '"Achha," / "Haan ji," / "Hmm," / "Ji bilkul," / "Theek hai,"'
-        thinking_examples = '"Ek second..." / "Hmm, dekhte hain..." / "Sochte hain..."'
+        filler_rule = (
+            'EVERY reply MUST begin with a spoken filler. No exceptions.\n'
+            '  • Short answer → "Haan ji," / "Achha," / "Bilkul," / "Theek hai,"\n'
+            '  • Surprised/excited → "Wah," / "Accha!"\n'
+            '  • Thinking/processing → start with "Hmm..." or "Ek second..." THEN answer\n'
+            '  • Confusion → "Sorry, ek baar phir se bata sakte hain?"\n'
+            '  • Agreeing → "Ji bilkul," / "Haan, zaroor,"\n'
+            'BAD: "Toh aap kya chahte hain?" — no filler\n'
+            'GOOD: "Achha, toh aap kya chahte hain?" — has filler'
+        )
     else:
-        language_rule = "Speak English by default. Switch to Hindi or Hinglish if the caller uses it."
-        opener_examples = '"Right," / "I see," / "Got it," / "Sure," / "Mm-hmm,"'
-        thinking_examples = '"Hmm, let me think..." / "One moment..." / "Let me see..."'
+        language_rule = "Speak English by default. Switch to Hindi or Hinglish if the caller uses it. Short sentences only."
+        filler_rule = (
+            'EVERY reply MUST begin with a spoken filler. No exceptions.\n'
+            '  • Short answer → "Right," / "Got it," / "Sure," / "I see,"\n'
+            '  • Thinking → "Hmm..." or "One moment..." THEN answer\n'
+            '  • Confusion → "Sorry, could you say that again?"\n'
+            '  • Agreeing → "Absolutely," / "Of course,"\n'
+            'BAD: "Are you looking to buy or rent?" — no filler\n'
+            'GOOD: "Right, are you looking to buy or rent?" — has filler'
+        )
 
     return f"""You are {agent_name}, a warm and friendly human voice assistant from {company}.
 
 LANGUAGE: {language_rule}
 
-SOUND HUMAN — THIS IS CRITICAL:
-- ALWAYS start every reply with a short filler/acknowledgment: {opener_examples}
-  Example: "Achha, toh aap property khareedna chahte hain?"  NOT just "Toh aap property..."
-- When you need a moment to think or the question is complex, say: {thinking_examples}
-- Never respond with zero filler — even for simple answers, lead with an acknowledgment
-- Keep replies short — 1-2 sentences max unless caller asks for detail
-- Ask only one question at a time
-- NEVER say you are an AI or a bot — you are {agent_name}
+FILLER WORDS — MANDATORY:
+{filler_rule}
+
+CONVERSATION STYLE:
+- Keep replies to 1-2 short sentences — this is a phone call
+- Ask only ONE question at a time
+- NEVER say you are an AI or a bot — you are {agent_name}, a real person
 - Mirror caller's energy: warm when friendly, calm when serious
+- If caller says something unclear, ask to repeat rather than guess
 
 CONVERSATION FLOW:
-- After greeting is acknowledged → ask if it's a good time to talk
-- If yes → gently qualify: intent (buy/rent/invest), property type, budget, location
-- If no → ask for a good callback time, then end politely
-- If not interested → thank them warmly and end the call
-- If caller repeats or seems confused → rephrase your last question simply
+1. After caller acknowledges greeting → ask if it's a good time to talk
+2. If yes → qualify gently: intent (buy/rent/invest), property type, budget, location
+3. If no → ask for a good callback time, then end politely
+4. If not interested → thank them warmly and say goodbye
+5. If caller is confused → rephrase simply and ask again
 
-TRANSFER: Only use transfer_call if caller clearly says "transfer" or "live agent". Never on short or noisy input."""
+TRANSFER: Use transfer_call ONLY if caller clearly says "transfer me" or "connect to agent". Never on short, noisy, or ambiguous input."""
 
 
 class OutboundAssistant(Agent):
@@ -893,9 +934,15 @@ async def entrypoint(ctx: agents.JobContext):
             try:
                 await _speak_scripted_line(session, text=first_message, realtime_audio=realtime_audio)
                 logger.info("Initial greeting sent.")
+                # CRITICAL: reset the silence timer AFTER greeting ends, so the
+                # reprompt (NO_SPEECH_REPROMPT_SEC) is measured from this moment,
+                # not from entrypoint start (which is ~8s earlier).
+                last_user_speech_at = time.time()
                 reprompt_task = asyncio.create_task(_reprompt_if_no_speech())
             except Exception as greet_error:
                 logger.warning(f"Failed to send initial greeting: {greet_error}")
+                last_user_speech_at = time.time()
+                reprompt_task = asyncio.create_task(_reprompt_if_no_speech())
 
         except Exception as e:
             logger.error(f"Failed to place outbound call: {e}")
