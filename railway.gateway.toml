@@ -1,0 +1,10 @@
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.gateway"
+
+[deploy]
+startCommand = "python services/gateway/run_server.py"
+restartPolicyType = "on_failure"
+restartPolicyMaxRetries = 5
+healthcheckPath = "/health"
+healthcheckTimeout = 30
