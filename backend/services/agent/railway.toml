@@ -1,8 +1,0 @@
-[build]
-builder = "dockerfile"
-dockerfilePath = "services/agent/Dockerfile"
-
-[deploy]
-startCommand = "python services/agent/run_agent.py start"
-restartPolicyType = "on_failure"
-restartPolicyMaxRetries = 5
