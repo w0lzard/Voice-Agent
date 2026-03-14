@@ -6,3 +6,6 @@ dockerfilePath = "Dockerfile"
 startCommand = "python agent.py start"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 5
+
+# Agent is a background worker — no HTTP server to health-check
+healthcheckPath = ""
