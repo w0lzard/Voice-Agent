@@ -6,6 +6,12 @@ from fastapi.responses import JSONResponse
 router = APIRouter()
 
 
+@router.get("/")
+async def root():
+    """Root endpoint."""
+    return {"status": "API Gateway Running"}
+
+
 @router.get("/health")
 async def health_check():
     """Basic health check endpoint."""
