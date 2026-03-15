@@ -8,7 +8,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from shared.auth.models import (
     SignupRequest, LoginRequest, TokenResponse, RefreshRequest,
     UserResponse, CreateApiKeyRequest, ApiKeyResponse,
-    ForgotPasswordRequest, ResetPasswordRequest, User
+    ForgotPasswordRequest, ResetPasswordRequest, User,
+    VerifyEmailRequest, ResendCodeRequest,
 )
 from shared.auth.service import AuthService
 from shared.auth.dependencies import get_current_user, require_auth
@@ -19,26 +20,16 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 @router.post("/signup", response_model=dict)
 async def signup(request: SignupRequest):
     """
-    Register a new user and create their workspace.
-    
-    Returns access and refresh tokens.
+    Register a new user and send email OTP for verification.
+    Tokens are only issued after the email is verified via /auth/verify.
     """
     try:
-        user, workspace, tokens = await AuthService.signup(request)
+        user, workspace = await AuthService.signup(request)
         return {
-            "user": UserResponse(
-                user_id=user.user_id,
-                email=user.email,
-                name=user.name,
-                workspace_id=user.workspace_id,
-                role=user.role,
-                created_at=user.created_at,
-            ).model_dump(),
-            "workspace": {
-                "workspace_id": workspace.workspace_id,
-                "name": workspace.name,
-            },
-            "tokens": tokens.model_dump(),
+            "ok": True,
+            "needsVerification": True,
+            "email": user.email,
+            "message": "Account created. Check your email for the verification code.",
         }
     except ValueError as e:
         raise HTTPException(
@@ -51,8 +42,7 @@ async def signup(request: SignupRequest):
 async def login(request: LoginRequest):
     """
     Login with email and password.
-    
-    Returns access and refresh tokens.
+    Returns tokens, or needsVerification if email not yet confirmed.
     """
     try:
         user, tokens = await AuthService.login(request)
@@ -68,10 +58,47 @@ async def login(request: LoginRequest):
             "tokens": tokens.model_dump(),
         }
     except ValueError as e:
+        msg = str(e)
+        if msg.startswith("EMAIL_NOT_VERIFIED:"):
+            email = msg.split(":", 1)[1]
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"needsVerification": True, "email": email},
+            )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e),
         )
+
+
+@router.post("/verify", response_model=dict)
+async def verify_email(request: VerifyEmailRequest):
+    """Verify email OTP and return tokens."""
+    try:
+        user, tokens = await AuthService.verify_otp(request.email, request.code)
+        return {
+            "user": UserResponse(
+                user_id=user.user_id,
+                email=user.email,
+                name=user.name,
+                workspace_id=user.workspace_id,
+                role=user.role,
+                created_at=user.created_at,
+            ).model_dump(),
+            "tokens": tokens.model_dump(),
+        }
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+
+
+@router.post("/resend-code", response_model=dict)
+async def resend_code(request: ResendCodeRequest):
+    """Resend OTP verification code."""
+    await AuthService.resend_otp(request.email)
+    return {"ok": True, "message": "Verification code sent."}
 
 
 @router.post("/refresh", response_model=TokenResponse)

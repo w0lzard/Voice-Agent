@@ -47,11 +47,12 @@ const PATTERN_STUBS = [
   { method: 'GET',    pattern: /^\/calls\/[^/]+\/transcript$/, response: { ok: true, data: null } },
   { method: 'GET',    pattern: /^\/calls\/[^/]+\/recordings$/, response: { ok: true, data: [] } },
   { method: 'PUT',    pattern: /^\/auth\/(profile|password)$/, response: { ok: true } },
+  { method: 'POST',   pattern: /^\/auth\/resend-code$/,         response: { ok: true, message: 'Code sent' } },
 ];
 
 // ─── Response normalisation ───────────────────────────────────────────────────
 function normalise(path, data) {
-  if ((path === '/auth/login' || path === '/auth/signup') && data?.tokens) {
+  if ((path === '/auth/login' || path === '/auth/signup' || path === '/auth/verify') && data?.tokens) {
     return { ok: true, token: data.tokens.access_token, user: data.user };
   }
   if (path === '/auth/me' && data?.user_id) {
@@ -130,8 +131,16 @@ async function handleRequest(request, { params }, method) {
     try { data = await res.json(); } catch { /* non-JSON body */ }
 
     if (!res.ok) {
+      // Pass needsVerification through (e.g. unverified email on login)
+      const detail = data.detail ?? data.error ?? 'Request failed';
+      if (detail && typeof detail === 'object' && detail.needsVerification) {
+        return NextResponse.json(
+          { ok: false, needsVerification: true, email: detail.email },
+          { status: res.status }
+        );
+      }
       return NextResponse.json(
-        { ok: false, error: data.detail ?? data.error ?? 'Request failed' },
+        { ok: false, error: typeof detail === 'string' ? detail : 'Request failed' },
         { status: res.status }
       );
     }

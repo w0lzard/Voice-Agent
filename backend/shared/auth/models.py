@@ -21,6 +21,8 @@ class User(BaseModel):
     workspace_id: str
     role: str = "owner"  # owner, admin, member
     email_verified: bool = False
+    otp_code: Optional[str] = None
+    otp_expires_at: Optional[datetime] = None
     failed_login_attempts: int = 0
     last_login: Optional[datetime] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -115,6 +117,17 @@ class ApiKeyResponse(BaseModel):
     permissions: List[str]
     created_at: datetime
     key: Optional[str] = None  # Full key only returned on creation
+
+
+class VerifyEmailRequest(BaseModel):
+    """Verify email with OTP."""
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6)
+
+
+class ResendCodeRequest(BaseModel):
+    """Resend OTP verification code."""
+    email: EmailStr
 
 
 class ForgotPasswordRequest(BaseModel):

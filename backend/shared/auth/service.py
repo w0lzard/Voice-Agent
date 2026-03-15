@@ -1,7 +1,9 @@
 """Authentication service."""
 import secrets
 import hashlib
-from datetime import datetime, timezone
+import random
+import logging
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple
 
 from shared.database.connection import get_database
@@ -16,6 +18,8 @@ from .jwt_handler import (
     get_token_expiry_seconds
 )
 
+logger = logging.getLogger("auth_service")
+
 
 class AuthService:
     """Authentication service for user management."""
@@ -26,53 +30,147 @@ class AuthService:
         return hashlib.sha256(key.encode()).hexdigest()
     
     @staticmethod
-    async def signup(request: SignupRequest) -> Tuple[User, Workspace, TokenResponse]:
+    def _generate_otp() -> str:
+        """Generate a 6-digit OTP."""
+        return f"{random.randint(100000, 999999)}"
+
+    @staticmethod
+    async def _store_otp(user_id: str, otp: str):
+        """Store OTP in the database with 10-minute expiry."""
+        db = get_database()
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=10)
+        await db.users.update_one(
+            {"user_id": user_id},
+            {"$set": {"otp_code": otp, "otp_expires_at": expires_at}}
+        )
+
+    @staticmethod
+    async def signup(request: SignupRequest) -> Tuple[User, Workspace]:
         """
-        Register a new user and create their workspace.
-        
+        Register a new user, create their workspace, and send OTP.
+
         Returns:
-            Tuple of (user, workspace, tokens)
+            Tuple of (user, workspace) — tokens issued only after email verification
         """
         db = get_database()
-        
+
         # Check if email already exists
         existing = await db.users.find_one({"email": request.email})
         if existing:
             raise ValueError("Email already registered")
-        
+
         # Create workspace
         workspace_name = request.workspace_name or f"{request.name}'s Workspace"
         workspace = Workspace(
             name=workspace_name,
-            owner_id="",  # Will be updated after user creation
+            owner_id="",
         )
-        
-        # Create user
+
+        # Create user (unverified)
         user = User(
             email=request.email,
             password_hash=hash_password(request.password),
             name=request.name,
             workspace_id=workspace.workspace_id,
             role="owner",
+            email_verified=False,
         )
-        
-        # Update workspace owner
         workspace.owner_id = user.user_id
-        
+
         # Save to database
         await db.workspaces.insert_one(workspace.model_dump())
         await db.users.insert_one(user.model_dump())
-        
+
         # Create indexes (if not exist)
         await db.users.create_index("email", unique=True)
         await db.users.create_index("workspace_id")
         await db.api_keys.create_index("key_hash", unique=True)
         await db.api_keys.create_index("workspace_id")
-        
-        # Generate tokens
+
+        # Generate and send OTP
+        otp = AuthService._generate_otp()
+        await AuthService._store_otp(user.user_id, otp)
+
+        try:
+            from shared.email_service import send_otp_email
+            await send_otp_email(user.email, otp, user.name)
+        except Exception as e:
+            logger.error(f"Failed to send OTP email to {user.email}: {e}")
+            # Log OTP to console as fallback so admin can see it
+            logger.warning(f"OTP for {user.email}: {otp}")
+
+        return user, workspace
+
+    @staticmethod
+    async def verify_otp(email: str, code: str) -> Tuple[User, TokenResponse]:
+        """
+        Verify OTP and mark email as verified.
+
+        Returns:
+            Tuple of (user, tokens) on success
+        """
+        db = get_database()
+
+        user_data = await db.users.find_one({"email": email})
+        if not user_data:
+            raise ValueError("User not found")
+
+        user = User(**user_data)
+
+        if user.email_verified:
+            # Already verified — just return tokens
+            tokens = AuthService._create_tokens(user)
+            return user, tokens
+
+        if not user.otp_code:
+            raise ValueError("No verification code found. Please request a new one.")
+
+        now = datetime.now(timezone.utc)
+        expires = user.otp_expires_at
+        if expires and expires.tzinfo is None:
+            expires = expires.replace(tzinfo=timezone.utc)
+
+        if expires is None or now > expires:
+            raise ValueError("Verification code has expired. Please request a new one.")
+
+        if user.otp_code != code:
+            raise ValueError("Invalid verification code.")
+
+        # Mark as verified and clear OTP
+        await db.users.update_one(
+            {"user_id": user.user_id},
+            {"$set": {"email_verified": True, "otp_code": None, "otp_expires_at": None}}
+        )
+        user.email_verified = True
+
         tokens = AuthService._create_tokens(user)
-        
-        return user, workspace, tokens
+        return user, tokens
+
+    @staticmethod
+    async def resend_otp(email: str) -> bool:
+        """Resend OTP to the given email."""
+        db = get_database()
+
+        user_data = await db.users.find_one({"email": email})
+        if not user_data:
+            # Return True for security (don't reveal if email exists)
+            return True
+
+        user = User(**user_data)
+        if user.email_verified:
+            return True
+
+        otp = AuthService._generate_otp()
+        await AuthService._store_otp(user.user_id, otp)
+
+        try:
+            from shared.email_service import send_otp_email
+            await send_otp_email(user.email, otp, user.name)
+        except Exception as e:
+            logger.error(f"Failed to resend OTP to {user.email}: {e}")
+            logger.warning(f"OTP for {user.email}: {otp}")
+
+        return True
     
     @staticmethod
     async def login(request: LoginRequest) -> Tuple[User, TokenResponse]:
@@ -93,13 +191,24 @@ class AuthService:
         
         # Check password
         if not verify_password(request.password, user.password_hash):
-            # Increment failed attempts
             await db.users.update_one(
                 {"user_id": user.user_id},
                 {"$inc": {"failed_login_attempts": 1}}
             )
             raise ValueError("Invalid email or password")
-        
+
+        # Block login if email not verified — send a fresh OTP
+        if not user.email_verified:
+            otp = AuthService._generate_otp()
+            await AuthService._store_otp(user.user_id, otp)
+            try:
+                from shared.email_service import send_otp_email
+                await send_otp_email(user.email, otp, user.name)
+            except Exception as e:
+                logger.error(f"Failed to send OTP on login to {user.email}: {e}")
+                logger.warning(f"OTP for {user.email}: {otp}")
+            raise ValueError(f"EMAIL_NOT_VERIFIED:{user.email}")
+
         # Reset failed attempts and update last login
         await db.users.update_one(
             {"user_id": user.user_id},
