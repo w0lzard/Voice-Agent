@@ -1,45 +1,20 @@
-"""Email service for sending OTP and notifications."""
-import asyncio
-import smtplib
+"""Email service — uses Resend HTTP API (no SMTP, works on Railway)."""
 import logging
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+import httpx
 
 logger = logging.getLogger("email_service")
 
-
-def _send_email_sync(to_email: str, subject: str, html_body: str):
-    """Send email synchronously (run in executor)."""
-    from shared.settings import config
-
-    if not config.EMAIL_USER or not config.EMAIL_PASSWORD:
-        logger.warning("Email not configured — OTP: check server logs for code")
-        raise RuntimeError("Email service not configured. Set EMAIL_USER and EMAIL_PASSWORD.")
-
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = subject
-    msg["From"] = config.EMAIL_FROM or config.EMAIL_USER
-    msg["To"] = to_email
-    msg.attach(MIMEText(html_body, "html"))
-
-    host = config.EMAIL_SMTP_HOST
-    port = config.EMAIL_SMTP_PORT
-
-    if port == 465:
-        with smtplib.SMTP_SSL(host, port, timeout=10) as server:
-            server.login(config.EMAIL_USER, config.EMAIL_PASSWORD)
-            server.sendmail(msg["From"], to_email, msg.as_string())
-    else:
-        with smtplib.SMTP(host, port, timeout=10) as server:
-            server.ehlo()
-            server.starttls()
-            server.login(config.EMAIL_USER, config.EMAIL_PASSWORD)
-            server.sendmail(msg["From"], to_email, msg.as_string())
+RESEND_API_URL = "https://api.resend.com/emails"
 
 
 async def send_otp_email(to_email: str, otp: str, name: str = "User"):
-    """Send OTP verification email."""
-    subject = "Your verification code – AI Call Agent"
+    """Send OTP verification email via Resend API."""
+    from shared.settings import config
+
+    if not config.RESEND_API_KEY:
+        logger.error("RESEND_API_KEY not set — cannot send email")
+        raise RuntimeError("Email service not configured. Set RESEND_API_KEY in Railway.")
+
     html = f"""
     <!DOCTYPE html>
     <html>
@@ -52,8 +27,8 @@ async def send_otp_email(to_email: str, otp: str, name: str = "User"):
               <tr>
                 <td align="center" style="padding-bottom:24px;">
                   <div style="background:#7AB2B2;width:48px;height:48px;border-radius:12px;
-                              display:inline-block;line-height:48px;font-size:24px;
-                              text-align:center;">✉</div>
+                              line-height:48px;font-size:24px;text-align:center;
+                              display:inline-block;">✉</div>
                 </td>
               </tr>
               <tr>
@@ -82,5 +57,26 @@ async def send_otp_email(to_email: str, otp: str, name: str = "User"):
     </body>
     </html>
     """
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _send_email_sync, to_email, subject, html)
+
+    payload = {
+        "from": config.EMAIL_FROM or "AI Call Agent <onboarding@resend.dev>",
+        "to": [to_email],
+        "subject": "Your verification code – AI Call Agent",
+        "html": html,
+    }
+
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.post(
+            RESEND_API_URL,
+            headers={
+                "Authorization": f"Bearer {config.RESEND_API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+        )
+
+    if response.status_code not in (200, 201):
+        logger.error(f"Resend API error {response.status_code}: {response.text}")
+        raise RuntimeError(f"Failed to send email: {response.text}")
+
+    logger.info(f"OTP email sent to {to_email} via Resend")

@@ -93,12 +93,9 @@ class Config:
     VOBIZ_CALLER_ID = _normalize_phone(os.getenv("VOBIZ_CALLER_ID") or os.getenv("VOBIZ_OUTBOUND_NUMBER"))
     VOBIZ_TRUNK_NAME = (os.getenv("VOBIZ_TRUNK_NAME") or "vobiz-outbound-auto").strip() or "vobiz-outbound-auto"
     
-    # Email (SMTP) — for OTP verification
-    EMAIL_USER = os.getenv("EMAIL_USER", "")           # e.g. you@gmail.com
-    EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")   # Gmail App Password
-    EMAIL_FROM = os.getenv("EMAIL_FROM", "")           # Display sender (defaults to EMAIL_USER)
-    EMAIL_SMTP_HOST = os.getenv("EMAIL_SMTP_HOST", "smtp.gmail.com")
-    EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "587"))
+    # Email — Resend API (https://resend.com, free tier 3000 emails/month)
+    RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+    EMAIL_FROM = os.getenv("EMAIL_FROM", "")  # e.g. "AI Agent <noreply@yourdomain.com>"
 
     # Server
     API_HOST = os.getenv("API_HOST", "0.0.0.0")
