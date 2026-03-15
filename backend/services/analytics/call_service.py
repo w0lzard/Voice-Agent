@@ -97,14 +97,28 @@ class CallService:
         # Save to database
         await db.calls.insert_one(call.to_dict())
         logger.info(f"Created call record: {call_id}")
-        
+
         # Invalidate calls cache
         if workspace_id:
             await SessionCache.invalidate_calls(workspace_id)
-        
+
+        # Broadcast call_started to WebSocket monitor clients
+        try:
+            from gateway.routers.monitor import manager as ws_manager
+            await ws_manager.broadcast({
+                "type": "call_started",
+                "payload": {
+                    "callUuid": call.call_id,
+                    "phoneNumber": call.phone_number,
+                    "direction": "outbound",
+                },
+            })
+        except Exception:
+            pass  # Monitor is best-effort
+
         # Dispatch the agent
         await CallService._dispatch_agent(call, assistant_config, sip_trunk_id)
-        
+
         return call
     
     @staticmethod
@@ -296,8 +310,17 @@ class CallService:
         if recording_url:
             updates["recording_url"] = recording_url
         
-        return await CallService.update_call(call_id, updates)
-    
+        result = await CallService.update_call(call_id, updates)
+
+        # Broadcast call_ended to WebSocket monitor clients
+        try:
+            from gateway.routers.monitor import manager as ws_manager
+            await ws_manager.broadcast({"type": "call_ended", "payload": {"callUuid": call_id}})
+        except Exception:
+            pass
+
+        return result
+
     @staticmethod
     async def mark_call_failed(call_id: str, reason: str = None) -> Optional[CallRecord]:
         """Mark a call as failed."""

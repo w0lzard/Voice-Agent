@@ -79,12 +79,14 @@ def create_app() -> FastAPI:
     app.add_middleware(RateLimitMiddleware, rate_limiter=rate_limiter)
     
     # Register routers
-    from gateway.routers import calls, health, assistants, phone_numbers, sip_configs, campaigns, tools, job_queue, auth
+    from gateway.routers import calls, health, assistants, phone_numbers, sip_configs, campaigns, tools, job_queue, auth, monitor
     from shared.auth.dependencies import get_current_user
-    
+
     # Public routes (no auth required)
     app.include_router(health.router, tags=["Health"])
     app.include_router(auth.router, prefix="/api", tags=["Authentication"])
+    # WebSocket monitor — must be public (WS upgrades can't send Bearer headers easily)
+    app.include_router(monitor.router, tags=["Monitor"])
     
     # Protected routes (require auth when AUTH_ENABLED=true)
     app.include_router(assistants.router, prefix="/api", tags=["Assistants"], dependencies=[Depends(get_current_user)])
