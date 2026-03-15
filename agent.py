@@ -407,19 +407,24 @@ def _build_realtime_llm():
                     start_of_speech_sensitivity=google_genai_types.StartSensitivity.START_SENSITIVITY_HIGH,
                     end_of_speech_sensitivity=google_genai_types.EndSensitivity.END_SENSITIVITY_HIGH,
                     prefix_padding_ms=20,
-                    # 200ms silence threshold — minimum practical value for PSTN
-                    silence_duration_ms=_get_int_env("GEMINI_SILENCE_DURATION_MS", 200),
+                    # Fix: was reading wrong env var GEMINI_SILENCE_DURATION_MS; correct
+                    # name is GOOGLE_REALTIME_SILENCE_DURATION_MS (160ms in .env).
+                    silence_duration_ms=_get_int_env("GOOGLE_REALTIME_SILENCE_DURATION_MS", 160),
                 ),
-                # TURN_INCLUDES_ALL_INPUT: Gemini sees the full audio stream (speech +
-                # silence) and uses it to decide when to respond. Using
-                # TURN_INCLUDES_ONLY_ACTIVITY caused background PSTN noise to keep
-                # the activity window open indefinitely, worsening latency.
+                # START_OF_ACTIVITY_INTERRUPTS: lets the caller cut in instantly
+                # without waiting for Gemini's turn to finish.
                 activity_handling=google_genai_types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
             )
             # Enable transcription of user audio so logs/events carry full text
             extra_kwargs["input_audio_transcription"] = google_genai_types.AudioTranscriptionConfig()
             # Affective dialog makes Gemini mirror caller's emotional tone naturally
             extra_kwargs["enable_affective_dialog"] = True
+
+        # Limit output tokens — shorter responses have lower TTFA (time-to-first-audio).
+        # GOOGLE_REALTIME_MAX_OUTPUT_TOKENS=96 in .env; 0 means unlimited (slower).
+        max_tokens = _get_int_env("GOOGLE_REALTIME_MAX_OUTPUT_TOKENS", 0)
+        if max_tokens > 0:
+            extra_kwargs["max_output_tokens"] = max_tokens
 
         return google.realtime.RealtimeModel(
             model=model,
@@ -791,10 +796,10 @@ async def entrypoint(ctx: agents.JobContext):
             tools=fnc_ctx.flatten(),
             turn_detection="realtime_llm",
             allow_interruptions=True,
-            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.20),
-            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.60),
-            # High timeout prevents agent interrupting itself via PSTN echo/feedback
-            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 1.5),
+            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.10),
+            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.30),
+            # 0.5s default prevents echo self-interruption; env can tighten further
+            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.50),
             user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
         )
     else:
@@ -952,9 +957,10 @@ async def entrypoint(ctx: agents.JobContext):
                 except Exception as greet_error:
                     _err = str(greet_error).lower()
                     if _attempt < _max_attempts - 1 and ("timed out" in _err or "timeout" in _err):
-                        _wait = 1.5 * (_attempt + 1)
+                        # Shorter backoff: 0.5s then 1.5s (was 1.5s then 3s)
+                        _wait = 0.5 * (2 ** _attempt)
                         logger.warning(
-                            "Greeting timed out (Gemini not ready yet), "
+                            "Greeting timed out (model not ready yet), "
                             f"retrying in {_wait:.1f}s... (attempt {_attempt + 1}/{_max_attempts})"
                         )
                         await asyncio.sleep(_wait)
