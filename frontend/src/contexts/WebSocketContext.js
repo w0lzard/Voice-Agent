@@ -165,19 +165,20 @@ export function WebSocketProvider({ children }) {
   const maxReconnectAttempts = 50;
 
   const resolveWsUrl = useCallback(() => {
-    const base = process.env.NEXT_PUBLIC_API_BASE || process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000';
-    let wsUrl = '';
-
-    // Explicit logic for local dev vs production WS routing
-    if (base.includes('localhost')) {
-      wsUrl = 'ws://localhost:3000/monitor';
-    } else {
-      // In production (e.g., https://api.admin.com/api) stip /api
-      const hostBase = base.replace(/\/api(\/v\d+)?$/i, '');
-      wsUrl = hostBase.replace(/^http/, 'ws') + '/monitor';
+    // NEXT_PUBLIC_WS_URL takes priority (set in Vercel to wss://your-gateway.railway.app)
+    if (process.env.NEXT_PUBLIC_WS_URL) {
+      return process.env.NEXT_PUBLIC_WS_URL.replace(/\/+$/, '') + '/monitor';
     }
 
-    return wsUrl;
+    const base = process.env.NEXT_PUBLIC_API_BASE || process.env.NEXT_PUBLIC_API_URL || '';
+
+    if (!base || base.includes('localhost')) {
+      // Local dev
+      return 'ws://localhost:3000/monitor';
+    }
+
+    const hostBase = base.replace(/\/api(\/v\d+)?$/i, '');
+    return hostBase.replace(/^http/, 'ws') + '/monitor';
   }, []);
 
   // Connect to WebSocket

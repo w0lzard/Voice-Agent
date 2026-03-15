@@ -58,6 +58,10 @@ function normalise(path, data) {
   if (path === '/auth/me' && data?.user_id) {
     return { ok: true, user: data };
   }
+  // Backend returns { calls: [...], count: N }
+  if (data && Array.isArray(data.calls)) {
+    return { ok: true, data: data.calls, total: data.count ?? data.calls.length };
+  }
   if (data && Array.isArray(data.items)) {
     return { ok: true, data: data.items, total: data.total ?? data.items.length };
   }
