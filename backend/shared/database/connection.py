@@ -49,8 +49,8 @@ async def _create_indexes(db: AsyncIOMotorDatabase):
     """Create necessary indexes for the calls collection."""
     calls = db.calls
     
-    # Index for call_id lookups
-    await calls.create_index("call_id", unique=True)
+    # Index for call_id lookups (sparse so null values don't conflict)
+    await calls.create_index("call_id", unique=True, sparse=True)
     
     # Index for phone number queries
     await calls.create_index("phone_number")
