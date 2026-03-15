@@ -75,6 +75,10 @@ function normalise(path, data) {
 
 // ─── Path & body mapping ──────────────────────────────────────────────────────
 function mapRequest(path, method) {
+  // Health & ready endpoints live at root (no /api prefix on gateway)
+  if (path === '/health' || path === '/ready') {
+    return { backendPath: path, transformBody: false, skipApiPrefix: true };
+  }
   // Frontend: POST /calls/start { campaignId, phoneNumber, language }
   // Backend:  POST /calls       { phone_number, language, campaign_id }
   if (path === '/calls/start' && method === 'POST') {
@@ -100,9 +104,9 @@ async function handleRequest(request, { params }, method) {
   }
 
   // 3. Forward to Railway Gateway
-  const { backendPath, transformBody } = mapRequest(path, method);
+  const { backendPath, transformBody, skipApiPrefix } = mapRequest(path, method);
   const searchParams = new URL(request.url).searchParams.toString();
-  const backendUrl = `${GATEWAY_URL}/api${backendPath}${searchParams ? '?' + searchParams : ''}`;
+  const backendUrl = `${GATEWAY_URL}${skipApiPrefix ? '' : '/api'}${backendPath}${searchParams ? '?' + searchParams : ''}`;
 
   const headers = {};
   const auth = request.headers.get('authorization');
