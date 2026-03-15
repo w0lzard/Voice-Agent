@@ -4,10 +4,21 @@
 @variant dark (&:is(.dark *));
 
 @theme {
-  --color-primary: #135bec;
+  --color-primary: #7AB2B2;
+  --color-secondary: #EBF4F6;
+  --color-gray-50: #f9fafb;
+  --color-gray-100: #f3f4f6;
+  --color-gray-200: #e5e7eb;
+  --color-gray-300: #d1d5db;
+  --color-gray-400: #9ca3af;
+  --color-gray-500: #6b7280;
+  --color-gray-600: #4b5563;
+  --color-gray-700: #374151;
+  --color-gray-800: #1f2937;
+  --color-gray-900: #111827;
   --color-background-light: #f6f6f8;
   --color-background-dark: #101622;
-  --color-surface: #1a2234;
+  --color-surface: #1f2937;
   --font-display: "Inter", sans-serif;
 }
 
@@ -28,12 +39,12 @@ body {
 }
 
 .neon-glow-blue {
-  box-shadow: 0 0 15px rgba(19, 91, 236, 0.3);
+  box-shadow: 0 0 15px rgba(122, 178, 178, 0.3);
 }
 
 .sidebar-active {
-  background: linear-gradient(90deg, rgba(19, 91, 236, 0.2) 0%, rgba(19, 91, 236, 0) 100%);
-  border-left: 3px solid #135bec;
+  background: linear-gradient(90deg, rgba(122, 178, 178, 0.15) 0%, rgba(122, 178, 178, 0) 100%);
+  border-left: 3px solid #7AB2B2;
 }
 
 /* Material Symbols */
@@ -93,4 +104,181 @@ body {
 /* Fill variant for Material Symbols */
 .fill-1 {
   font-variation-settings: 'FILL' 1, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+}
+
+/* ===== Authentication Page Styles ===== */
+.auth-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background-color: #101622;
+  padding: 20px;
+}
+
+.auth-card {
+  width: 100%;
+  max-width: 450px;
+  background: rgba(31, 41, 55, 0.8);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(122, 178, 178, 0.1);
+  border-radius: 12px;
+  padding: 40px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.auth-logo {
+  display: flex;
+  justify-content: center;
+  margin-bottom: 24px;
+}
+
+.auth-logo svg {
+  color: #7AB2B2;
+}
+
+.auth-title {
+  font-size: 28px;
+  font-weight: 700;
+  color: #e2e8f0;
+  text-align: center;
+  margin: 0 0 8px 0;
+}
+
+.auth-subtitle {
+  font-size: 14px;
+  color: #9ca3af;
+  text-align: center;
+  margin: 0 0 24px 0;
+}
+
+.auth-error {
+  background-color: rgba(220, 38, 38, 0.1);
+  border: 1px solid rgba(220, 38, 38, 0.3);
+  color: #fca5a5;
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin-bottom: 20px;
+  font-size: 13px;
+  text-align: center;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-bottom: 24px;
+}
+
+.form-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.form-group label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #d1d5db;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.form-group input {
+  padding: 12px 16px;
+  background-color: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(122, 178, 178, 0.2);
+  border-radius: 8px;
+  color: #e2e8f0;
+  font-size: 14px;
+  transition: all 0.2s ease;
+}
+
+.form-group input::placeholder {
+  color: #6b7280;
+}
+
+.form-group input:focus {
+  outline: none;
+  background-color: rgba(255, 255, 255, 0.08);
+  border-color: #7AB2B2;
+  box-shadow: 0 0 0 3px rgba(122, 178, 178, 0.1);
+}
+
+.btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: none;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.btn-primary {
+  background-color: #7AB2B2;
+  color: #ffffff;
+  width: 100%;
+}
+
+.btn-primary:hover:not(:disabled) {
+  background-color: #6a9e9e;
+  box-shadow: 0 4px 12px rgba(122, 178, 178, 0.3);
+}
+
+.btn-google {
+  background-color: rgba(255, 255, 255, 0.05);
+  color: #e2e8f0;
+  border: 1px solid rgba(122, 178, 178, 0.2);
+  width: 100%;
+}
+
+.btn-google:hover:not(:disabled) {
+  background-color: rgba(255, 255, 255, 0.08);
+  border-color: #7AB2B2;
+}
+
+.auth-divider {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 24px 0;
+  font-size: 13px;
+  color: #6b7280;
+  gap: 12px;
+}
+
+.auth-divider::before,
+.auth-divider::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background-color: rgba(122, 178, 178, 0.2);
+}
+
+.auth-footer {
+  font-size: 13px;
+  color: #9ca3af;
+  text-align: center;
+}
+
+.auth-footer a {
+  color: #7AB2B2;
+  text-decoration: none;
+  font-weight: 600;
+  transition: color 0.2s ease;
+}
+
+.auth-footer a:hover {
+  color: #8bc4c4;
 }

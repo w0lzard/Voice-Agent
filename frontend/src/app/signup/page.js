@@ -101,7 +101,7 @@ export default function SignupPage() {
                         />
                     </div>
 
-                    <button type="submit" className="btn btn-primary" style={{ width: '100%', padding: '10px 16px', fontSize: 14, justifyContent: 'center' }} disabled={loading}>
+                    <button type="submit" className="btn btn-primary" disabled={loading}>
                         {loading ? 'Creating account...' : 'Create Account'}
                     </button>
                 </form>

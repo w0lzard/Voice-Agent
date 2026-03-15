@@ -13,7 +13,6 @@ import { NextResponse } from 'next/server';
 // Set GATEWAY_URL on Vercel (server-side only — never exposed to browser)
 const GATEWAY_URL = (
   process.env.GATEWAY_URL ||
-  process.env.NEXT_PUBLIC_API_URL ||
   'http://localhost:8000'
 ).replace(/\/+$/, '');
 
@@ -52,35 +51,24 @@ const PATTERN_STUBS = [
 
 // ─── Response normalisation ───────────────────────────────────────────────────
 function normalise(path, data) {
-  // Login / signup: map tokens.access_token → token
   if ((path === '/auth/login' || path === '/auth/signup') && data?.tokens) {
     return { ok: true, token: data.tokens.access_token, user: data.user };
   }
-
-  // /auth/me: FastAPI returns the user object directly
   if (path === '/auth/me' && data?.user_id) {
     return { ok: true, user: data };
   }
-
-  // Paginated lists: { items, total } → { ok, data, total }
   if (data && Array.isArray(data.items)) {
     return { ok: true, data: data.items, total: data.total ?? data.items.length };
   }
-
-  // Already wrapped by backend
   if (data && data.ok !== undefined) return data;
-
   return { ok: true, data };
 }
 
 // ─── Path & body mapping ──────────────────────────────────────────────────────
 function mapRequest(path, method) {
-  // Health & ready endpoints live at root (no /api prefix on gateway)
   if (path === '/health' || path === '/ready') {
     return { backendPath: path, transformBody: false, skipApiPrefix: true };
   }
-  // Frontend: POST /calls/start { campaignId, phoneNumber, language }
-  // Backend:  POST /calls       { phone_number, language, campaign_id }
   if (path === '/calls/start' && method === 'POST') {
     return { backendPath: '/calls', transformBody: true };
   }
@@ -116,9 +104,7 @@ async function handleRequest(request, { params }, method) {
 
   if (['POST', 'PUT', 'PATCH'].includes(method)) {
     const ct = request.headers.get('content-type') || '';
-
     if (ct.includes('multipart/form-data')) {
-      // Let fetch set the boundary automatically
       fetchOptions.body = await request.formData();
     } else if (ct.includes('text/csv')) {
       headers['Content-Type'] = 'text/csv';
@@ -127,9 +113,7 @@ async function handleRequest(request, { params }, method) {
       headers['Content-Type'] = 'application/json';
       let body = {};
       try { body = await request.json(); } catch { /* empty body */ }
-
       if (transformBody) {
-        // /calls/start → /calls body shape
         body = {
           phone_number: body.phoneNumber ?? body.phone_number,
           language: body.language,
@@ -155,7 +139,7 @@ async function handleRequest(request, { params }, method) {
     return NextResponse.json(normalise(path, data));
   } catch {
     return NextResponse.json(
-      { ok: false, error: 'Failed to connect to backend. Check GATEWAY_URL.' },
+      { ok: false, error: 'Gateway unreachable. Check Railway deployment.' },
       { status: 502 }
     );
   }
