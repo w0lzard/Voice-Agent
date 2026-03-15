@@ -30,9 +30,22 @@ async def list_calls(
     user: User = Depends(get_current_user),
 ):
     """List calls."""
+    # Map frontend status values to backend enum (ignore unknown values)
+    STATUS_MAP = {
+        "queued": CallStatus.INITIATED,
+        "in-progress": CallStatus.ANSWERED,
+        "in_progress": CallStatus.ANSWERED,
+    }
+    parsed_status = None
+    if status:
+        try:
+            parsed_status = STATUS_MAP.get(status) or CallStatus(status)
+        except ValueError:
+            parsed_status = None
+
     calls = await CallService.list_calls(
         workspace_id=user.workspace_id if user else None,
-        status=CallStatus(status) if status else None,
+        status=parsed_status,
         limit=limit,
         skip=skip,
     )
