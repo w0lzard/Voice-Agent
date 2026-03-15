@@ -2,11 +2,11 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useAuth } from '@/components/AuthProvider';
 import { API_BASE } from '../../lib/api';
 
 export default function SignupPage() {
-    const router = useRouter();
+    const { login } = useAuth();
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -38,8 +38,8 @@ export default function SignupPage() {
                 return;
             }
 
-            // Redirect to verification
-            router.push(`/verify?email=${encodeURIComponent(email)}`);
+            // Log in directly with the tokens returned from signup
+            login(data.token, data.user);
         } catch {
             setError('Network error. Please make sure the backend is running.');
         } finally {

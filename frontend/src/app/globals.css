@@ -272,6 +272,35 @@ body {
   text-align: center;
 }
 
+.verify-inputs {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
+.verify-inputs input {
+  width: 48px;
+  height: 56px;
+  text-align: center;
+  font-size: 22px;
+  font-weight: 700;
+  border: 2px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #e2e8f0;
+  outline: none;
+  transition: border-color 0.2s ease;
+}
+
+.verify-inputs input:focus {
+  border-color: #7AB2B2;
+  background: rgba(122, 178, 178, 0.08);
+}
+
+.verify-inputs input:disabled {
+  opacity: 0.5;
+}
+
 .auth-footer a {
   color: #7AB2B2;
   text-decoration: none;
