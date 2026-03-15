@@ -158,7 +158,7 @@ class CallService:
                 logger.warning(f"Room {call.room_name} might already exist or failed execution: {e}")
 
             dispatch_request = api.CreateAgentDispatchRequest(
-                agent_name="voice-assistant",
+                agent_name="outbound-caller",
                 room=call.room_name,
                 metadata=metadata,
             )
