@@ -978,14 +978,31 @@ async def entrypoint(ctx: agents.JobContext):
             logger.info("conversation_item_added role=%s text=\"%s\"", role, _safe_log_text(text))
 
     async def _reprompt_if_no_speech() -> None:
-        """If caller stays silent/no transcript arrives, send a short reprompt."""
-        delay = _get_float_env("NO_SPEECH_REPROMPT_SEC", 5.0)
+        """If caller stays silent/no transcript arrives, send a short reprompt.
+
+        Default delay is 12s — long enough for the greeting audio to finish
+        playing and for the user to respond, preventing the reprompt from
+        racing with the greeting and corrupting Gemini session state.
+        """
+        delay = _get_float_env("NO_SPEECH_REPROMPT_SEC", 12.0)
         reprompt_text = _default_reprompt(_get_default_language())
         try:
             while True:
                 await asyncio.sleep(1.0)
                 if time.time() - last_user_speech_at < delay:
                     continue
+                # Stop any greeting audio still in-flight before inserting the
+                # reprompt. Without this, two concurrent generate_reply calls
+                # corrupt the Gemini session and the agent goes silent.
+                if realtime_audio:
+                    try:
+                        session.interrupt()
+                        await asyncio.sleep(0.15)
+                    except Exception:
+                        pass
+                # Re-check: user may have spoken while we were interrupting.
+                if time.time() - last_user_speech_at < 1.5:
+                    break
                 await _speak_scripted_line(
                     session,
                     text=reprompt_text,
