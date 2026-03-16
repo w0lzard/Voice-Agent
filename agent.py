@@ -319,6 +319,25 @@ def _default_reprompt(language: str) -> str:
     return "Hello, is this a good time to talk?"
 
 
+# Carrier auto-announcement phrases spoken by the telephony provider — NOT real user
+# speech. Filtering these prevents the watchdog / reprompt from firing prematurely.
+_CARRIER_PHRASES: frozenset[str] = frozenset([
+    "this call is now being recorded",
+    "this call may be recorded",
+    "this call is being recorded",
+    "call is being recorded",
+    "call may be recorded",
+    "yah call record ki ja rahi hai",
+    "yeh call record ki ja rahi hai",
+    "is call ko record kiya ja raha hai",
+])
+
+
+def _is_carrier_announcement(text: str) -> bool:
+    lower = text.lower().strip()
+    return any(phrase in lower for phrase in _CARRIER_PHRASES)
+
+
 def _safe_log_text(value: str, limit: int = 200) -> str:
     """Escape unicode for Windows terminals that still default to cp1252."""
     return value[:limit].encode("unicode_escape").decode("ascii")
@@ -888,31 +907,16 @@ async def _speak_scripted_line(
     text: str,
     realtime_audio: bool,
 ) -> None:
-    """Play a scripted line.
+    """Play a scripted line via TTS (session.say).
 
-    Realtime (Gemini Live / OpenAI Realtime): uses generate_reply() because the
-    realtime model IS the audio pipeline — there is no separate TTS.
-
-    Pipeline (STT → LLM → TTS): uses session.say() to bypass LLM entirely.
+    Using session.say() for ALL paths (realtime and pipeline) because:
+    - TTS is fast and reliable — no dependency on Gemini Live warm-up state.
+    - generate_reply() times out when Gemini's session is still initialising
+      (typically the first 13-15 s after start), causing the greeting to fail.
+    - The session has tts=_build_tts() configured, so say() synthesises via
+      OpenAI TTS and the Gemini realtime model handles conversation turns as
+      normal once it warms up.
     """
-    if realtime_audio:
-        reply_kwargs: dict = {
-            # Use natural-language instruction rather than verbatim script.
-            # "Verbatim" instructions fight the system-prompt filler rule causing
-            # Gemini to add "Achha," prefix and then paraphrase the rest.
-            # Instead, instruct what content to convey — Gemini speaks it naturally.
-            "instructions": (
-                f"This is the opening of the call — NOT a reply to the user. "
-                f"Deliver this greeting naturally without any leading filler word: {text}"
-            ),
-            "allow_interruptions": True,
-            "input_modality": "text",
-        }
-        if _get_realtime_provider() != "google":
-            reply_kwargs["tool_choice"] = "none"
-        await session.generate_reply(**reply_kwargs)
-        return
-
     await session.say(text, allow_interruptions=True, add_to_chat_ctx=True)
 
 
@@ -1017,6 +1021,9 @@ async def entrypoint(ctx: agents.JobContext):
     last_user_speech_at = time.time()
     # Use a list so sync event handlers can mutate it without nonlocal
     _last_agent_response_at: list[float] = [time.time()]
+    # Set to call-answer timestamp once wait_until_answered returns.
+    # Greeting task polls this so it can apply the post-answer carrier-window delay.
+    _call_answered_at: list[float] = [0.0]
     reprompt_task: asyncio.Task | None = None
     realtime_audio = _use_realtime_audio()
     if not _validate_runtime_provider_keys(realtime_audio):
@@ -1027,6 +1034,10 @@ async def entrypoint(ctx: agents.JobContext):
     if realtime_audio:
         session = AgentSession(
             llm=_build_realtime_llm(),
+            # tts is used by session.say() for scripted lines (greeting / reprompt /
+            # watchdog). It does NOT affect how Gemini Live generates conversational
+            # audio — that still comes through the realtime model's native pipeline.
+            tts=_build_tts(),
             tools=fnc_ctx.flatten(),
             turn_detection="realtime_llm",
             allow_interruptions=True,
@@ -1113,16 +1124,22 @@ async def entrypoint(ctx: agents.JobContext):
         transcript = (getattr(ev, "transcript", "") or "").strip()
         if not transcript:
             return
-        last_user_speech_at = time.time()
-        if reprompt_task and not reprompt_task.done():
-            reprompt_task.cancel()
-            reprompt_task = None
         logger.info(
             "user_input_transcribed final=%s language=%s text=\"%s\"",
             getattr(ev, "is_final", False),
             getattr(ev, "language", None),
             _safe_log_text(transcript),
         )
+        # Carrier announcements ("This call is now being recorded.") are spoken
+        # by the telephony provider, not the user. Counting them as user speech
+        # would falsely reset the silence timer and trigger the watchdog.
+        if _is_carrier_announcement(transcript):
+            logger.info("Carrier announcement detected — ignoring for speech timers.")
+            return
+        last_user_speech_at = time.time()
+        if reprompt_task and not reprompt_task.done():
+            reprompt_task.cancel()
+            reprompt_task = None
         if getattr(ev, "is_final", False):
             fnc_ctx.set_last_user_utterance(transcript)
 
@@ -1240,74 +1257,96 @@ async def entrypoint(ctx: agents.JobContext):
                         )
                         _last_agent_response_at[0] = now  # prevent re-trigger while recovering
                         try:
+                            # Interrupt any stale Gemini generation first, then play
+                            # a TTS prompt so the user knows the agent heard them.
+                            # This also gives Gemini's VAD a clean slate to respond
+                            # to the user's next utterance.
                             if realtime_audio:
                                 try:
                                     session.interrupt()
                                     await asyncio.sleep(0.3)
                                 except Exception:
                                     pass
+                            watchdog_text = (
+                                "Sorry, I didn't quite catch that. Could you please repeat?"
+                                if _get_default_language() == "en"
+                                else "Maafi chahta hoon, mujhe sahi se nahi suna. Kya aap dobara bol sakte hain?"
+                            )
                             await _speak_scripted_line(
                                 session,
-                                text="[Respond naturally to what the user just said.]",
+                                text=watchdog_text,
                                 realtime_audio=realtime_audio,
                             )
                         except Exception as wd_err:
-                            logger.debug("Watchdog generate_reply failed: %s", wd_err)
+                            logger.debug("Watchdog TTS fallback failed: %s", wd_err)
             except asyncio.CancelledError:
                 pass
 
         async def _send_greeting_and_start_reprompt() -> None:
             nonlocal last_user_speech_at, reprompt_task
-            # Gemini Live needs ~13-15s from job start before generate_reply is stable.
-            # Two failure modes if we call too early:
-            #   1) Timeout: SDK waits 5s for generation_created — never fires → raises
-            #   2) "No active generation" corruption: Gemini sends warmup-time content
-            #      that lands while our generate_reply is in-flight, desynchronising
-            #      the SDK's generation tracker → agent speaks greeting but then goes
-            #      permanently silent (subsequent user speech never gets a response).
+            # ----------------------------------------------------------------
+            # Greeting timing strategy
+            # ----------------------------------------------------------------
+            # Problem: Indian carriers play a "This call is now being recorded"
+            # announcement ~5-15s AFTER the callee picks up.  If our greeting
+            # fires at the same time, the carrier audio interrupts the greeting
+            # mid-sentence and corrupts Gemini Live's turn-detection state.
             #
-            # Fix A — use _entrypoint_start_at (not session.start() return time) so
-            #          the warmup clock accounts for session.start()'s own 2-4s cost.
-            # Fix B — call session.interrupt() + 1s settle BEFORE generate_reply to
-            #          flush any proactive Gemini content from the warmup period.
-            warmup_sec = _get_float_env("GEMINI_SESSION_WARMUP_SEC", 13.0)
-            elapsed = time.time() - _entrypoint_start_at
-            delay = max(_get_float_env("GREETING_MIN_DELAY_SEC", 0.5), warmup_sec - elapsed)
-            logger.debug(
-                "Greeting delay: %.1fs (warmup=%.0fs, elapsed_since_entrypoint=%.1fs)",
-                delay, warmup_sec, elapsed,
-            )
+            # Fix: wait for (a) call answered confirmation AND (b) a post-answer
+            # carrier window (CARRIER_ANNOUNCEMENT_WAIT_SEC, default 7s) before
+            # playing the greeting.  Using session.say() (TTS) rather than
+            # generate_reply() removes the Gemini warmup dependency entirely:
+            # TTS plays immediately from the OpenAI TTS plugin and does NOT
+            # require Gemini's realtime session to be fully initialised.
+            # ----------------------------------------------------------------
 
-            # Wait for Gemini to finish warming up. A single interrupt was already
-            # issued right after session.start() to cancel the first auto-generation.
-            # We do NOT interrupt repeatedly here — over-interrupting corrupts Gemini's
-            # turn-detection state machine, causing it to stop responding after the
-            # first user-triggered interruption of the greeting.
-            try:
-                await asyncio.wait_for(_call_failed.wait(), timeout=delay)
-                logger.info("Greeting aborted: SIP call failed during warmup.")
-                return
-            except asyncio.TimeoutError:
-                pass  # Normal path: warmup elapsed, call still in progress
+            # (a) Wait for the SIP call to be confirmed answered.
+            poll_deadline = time.time() + 60.0
+            while _call_answered_at[0] == 0.0:
+                if _call_failed.is_set():
+                    return
+                if time.time() > poll_deadline:
+                    logger.warning("Timed out waiting for answer confirmation; proceeding.")
+                    break
+                await asyncio.sleep(0.1)
 
             if _call_failed.is_set():
                 return
 
-            # Single interrupt + brief settle before sending the greeting.
-            # Clears any residual Gemini state from the warmup period.
+            # (b) Post-answer carrier-window delay.
+            carrier_wait = _get_float_env("CARRIER_ANNOUNCEMENT_WAIT_SEC", 7.0)
+            if _call_answered_at[0] > 0.0:
+                post_elapsed = time.time() - _call_answered_at[0]
+                carrier_remaining = max(0.0, carrier_wait - post_elapsed)
+                logger.debug(
+                    "Post-answer carrier wait: %.1fs remaining (carrier_wait=%.0fs answered=%.1fs ago)",
+                    carrier_remaining, carrier_wait, post_elapsed,
+                )
+                if carrier_remaining > 0:
+                    try:
+                        await asyncio.wait_for(_call_failed.wait(), timeout=carrier_remaining)
+                        logger.info("Greeting aborted: SIP call failed during carrier wait.")
+                        return
+                    except asyncio.TimeoutError:
+                        pass
+
+            if _call_failed.is_set():
+                return
+
+            # Brief interrupt to clear any Gemini auto-generation from startup
+            # before TTS plays — avoids Gemini audio and TTS audio colliding.
             if realtime_audio:
                 try:
                     session.interrupt()
-                    await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.3)
                 except Exception:
                     pass
+
             if _call_failed.is_set():
                 return
 
-            # With adequate warmup + pre-interrupt, attempt 1 should succeed.
-            # Keep one safety-net retry in case of transient network jitter.
-            _max_attempts = 2
-            for _attempt in range(_max_attempts):
+            # Play greeting via TTS (session.say). One retry on failure.
+            for _attempt in range(2):
                 if _call_failed.is_set():
                     logger.info("Greeting aborted mid-retry: SIP call failed.")
                     return
@@ -1318,23 +1357,11 @@ async def entrypoint(ctx: agents.JobContext):
                 except asyncio.CancelledError:
                     raise
                 except Exception as greet_error:
-                    _err = str(greet_error).lower()
-                    if _attempt == 0 and ("timed out" in _err or "timeout" in _err):
-                        logger.warning(
-                            "Greeting timed out — Gemini still not ready after warmup+interrupt. "
-                            "Retrying once after 2s. Consider increasing GEMINI_SESSION_WARMUP_SEC."
-                        )
-                        if realtime_audio:
-                            try:
-                                session.interrupt()
-                                await asyncio.sleep(0.5)
-                            except Exception:
-                                pass
-                        await asyncio.sleep(2.0)
-                    else:
-                        logger.warning(f"Greeting failed: {greet_error}")
-                        break
-            # Reset silence timer so reprompt is measured from greeting end, not entrypoint start.
+                    logger.warning("Greeting attempt %d failed: %s", _attempt + 1, greet_error)
+                    if _attempt == 0:
+                        await asyncio.sleep(1.5)
+
+            # Reset silence timer so reprompt is measured from greeting end.
             last_user_speech_at = time.time()
             reprompt_task = asyncio.create_task(_reprompt_if_no_speech())
             asyncio.ensure_future(_watchdog_agent_response())
@@ -1362,6 +1389,7 @@ async def entrypoint(ctx: agents.JobContext):
                 )
             )
             logger.info("Call confirmed answered.")
+            _call_answered_at[0] = time.time()  # unblocks carrier-window wait in greeting task
             # Safety: if participant_connected did not fire (edge case), trigger greeting now.
             if not _greeting_triggered:
                 _greeting_triggered = True
