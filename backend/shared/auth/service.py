@@ -449,7 +449,7 @@ class AuthService:
                 name=f"User's Workspace",
                 owner_id="",
             )
-            placeholder_email = f"{phone.lstrip('+').replace(' ', '')}@phone.local"
+            placeholder_email = f"{phone.lstrip('+').replace(' ', '')}@phone.vobiz.ai"
             user = User(
                 email=placeholder_email,
                 password_hash=secrets.token_hex(32),
