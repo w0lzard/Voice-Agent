@@ -90,23 +90,22 @@ export default function LoginPage() {
         <div className="auth-page">
             <div className="auth-card">
                 <div className="auth-logo">
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ width: 24, height: 24, color: 'white' }}>
-                        <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-                        <polyline points="9 22 9 12 15 12 15 22" />
-                    </svg>
+                    <div style={{width: 48, height: 48, borderRadius: 14, background: '#2b6cee', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 20px rgba(43,108,238,0.4)'}}>
+                        <span className="material-symbols-outlined" style={{color: 'white', fontSize: 24}}>graphic_eq</span>
+                    </div>
                 </div>
 
                 <h1 className="auth-title">Welcome Back</h1>
-                <p className="auth-subtitle">Sign in to your Estate Agent dashboard</p>
+                <p className="auth-subtitle">Sign in to your VoiceAI Platform account</p>
 
-                <div style={{ display: 'flex', gap: 8, marginBottom: 20, background: 'var(--bg-secondary, #1a1a2e)', borderRadius: 8, padding: 4 }}>
+                <div style={{ display: 'flex', gap: 6, marginBottom: 20, background: 'rgba(255,255,255,0.05)', borderRadius: 10, padding: 4 }}>
                     <button
                         type="button"
                         onClick={() => { setTab('email'); setError(''); }}
                         style={{
-                            flex: 1, padding: '7px 0', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
-                            background: tab === 'email' ? 'var(--accent, #6366f1)' : 'transparent',
-                            color: tab === 'email' ? '#fff' : 'var(--text-muted, #888)',
+                            flex: 1, padding: '7px 0', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                            background: tab === 'email' ? '#2b6cee' : 'transparent',
+                            color: tab === 'email' ? '#fff' : '#6b7280',
                             transition: 'all 0.15s',
                         }}
                     >
@@ -116,9 +115,9 @@ export default function LoginPage() {
                         type="button"
                         onClick={() => { setTab('phone'); setError(''); }}
                         style={{
-                            flex: 1, padding: '7px 0', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
-                            background: tab === 'phone' ? 'var(--accent, #6366f1)' : 'transparent',
-                            color: tab === 'phone' ? '#fff' : 'var(--text-muted, #888)',
+                            flex: 1, padding: '7px 0', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                            background: tab === 'phone' ? '#2b6cee' : 'transparent',
+                            color: tab === 'phone' ? '#fff' : '#6b7280',
                             transition: 'all 0.15s',
                         }}
                     >

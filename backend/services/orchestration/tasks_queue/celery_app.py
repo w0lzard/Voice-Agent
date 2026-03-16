@@ -1,15 +1,13 @@
 """
 Celery application configuration.
 """
-import os
 from celery import Celery
+from shared.redis_config import get_redis_url
 
 # Redis configuration
-REDIS_URL = os.getenv("REDIS_URL")
+REDIS_URL = get_redis_url()
 if not REDIS_URL:
-    REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-    REDIS_PORT = os.getenv("REDIS_PORT", "6379")
-    REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/0"
+    raise RuntimeError("Redis is required for Celery but no Redis configuration was found.")
 
 # Create Celery app
 celery_app = Celery(

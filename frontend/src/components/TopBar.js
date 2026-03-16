@@ -1,155 +1,136 @@
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 import { useAuth } from './AuthProvider';
 import { fetchWallet } from '../lib/api';
 
+const pageTitles = {
+  '/dashboard': 'Dashboard Overview',
+  '/calls': 'Call History',
+  '/voice': 'Voice Agents',
+  '/clients': 'Campaign Management',
+  '/wallet': 'Wallet & Billing',
+  '/knowledge-bases': 'Knowledge Base',
+  '/csv': 'Call Analytics',
+  '/profile': 'Profile & Settings',
+  '/support': 'Help & Support',
+};
+
 export default function TopBar() {
-    const { user, logout } = useAuth();
-    const router = useRouter();
+  const { user, logout } = useAuth();
+  const router = useRouter();
+  const pathname = usePathname();
+  const [balance, setBalance] = useState(null);
+  const [isBalanceAnimating, setIsBalanceAnimating] = useState(false);
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const dropdownRef = useRef(null);
 
-    const [balance, setBalance] = useState(null);
-    const [prevBalance, setPrevBalance] = useState(null);
-    const [isBalanceAnimating, setIsBalanceAnimating] = useState(false);
+  const pageTitle = pageTitles[pathname] || 'VoiceAI Platform';
 
-    const [isDropdownOpen, setIsDropdownOpen] = useState(false);
-    const dropdownRef = useRef(null);
-
-    // Initial fetch and polling for wallet balance
-    useEffect(() => {
-        let isMounted = true;
-
-        async function loadBalance() {
-            try {
-                const res = await fetchWallet();
-                if (res.ok && isMounted) {
-                    const newBalance = res.data?.currentBalance ?? 0;
-                    setBalance(current => {
-                        if (current !== null && current !== newBalance) {
-                            setIsBalanceAnimating(true);
-                            setTimeout(() => setIsBalanceAnimating(false), 2000);
-                        }
-                        return newBalance;
-                    });
-                }
-            } catch (err) {
-                console.error("Failed to load balance for topbar", err);
+  useEffect(() => {
+    let isMounted = true;
+    async function loadBalance() {
+      try {
+        const res = await fetchWallet();
+        if (res.ok && isMounted) {
+          const newBalance = res.data?.currentBalance ?? 0;
+          setBalance(current => {
+            if (current !== null && current !== newBalance) {
+              setIsBalanceAnimating(true);
+              setTimeout(() => setIsBalanceAnimating(false), 2000);
             }
+            return newBalance;
+          });
         }
+      } catch {}
+    }
+    if (user) {
+      loadBalance();
+      const id = setInterval(loadBalance, 30000);
+      return () => { isMounted = false; clearInterval(id); };
+    }
+  }, [user]);
 
-        if (user) {
-            loadBalance();
-            const intervalId = setInterval(loadBalance, 30000); // 30s poll
-            return () => {
-                isMounted = false;
-                clearInterval(intervalId);
-            };
-        }
-    }, [user]);
+  useEffect(() => {
+    function handleClick(e) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target))
+        setIsDropdownOpen(false);
+    }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
 
-    // Handle clicks outside dropdown to close it
-    useEffect(() => {
-        function handleClickOutside(event) {
-            if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
-                setIsDropdownOpen(false);
-            }
-        }
-        document.addEventListener('mousedown', handleClickOutside);
-        return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, []);
+  const userInitial = user?.name?.charAt(0)?.toUpperCase() || 'A';
 
-    const userInitial = user?.name ? user.name.charAt(0).toUpperCase() : 'A';
-    const userName = user?.name || 'Admin';
+  return (
+    <header className="sticky top-0 z-50 flex items-center justify-between px-6 py-3 border-b border-white/5" style={{background: 'rgba(10,14,23,0.8)', backdropFilter: 'blur(12px)'}}>
+      {/* Page title */}
+      <div>
+        <h2 className="text-slate-100 font-semibold text-base">{pageTitle}</h2>
+      </div>
 
-    return (
-        <header className="sticky top-0 z-50 glass border-b border-slate-800/50 px-8 py-4 flex items-center justify-between">
-            {/* Search */}
-            <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-slate-400">search</span>
-                <input
-                    className="bg-transparent border-none focus:ring-0 text-sm text-slate-300 w-64 placeholder:text-slate-500"
-                    placeholder="Search leads or recordings..."
-                    type="text"
-                />
+      {/* Right section */}
+      <div className="flex items-center gap-3">
+        {/* Balance */}
+        {balance !== null && (
+          <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg border border-white/5 bg-white/3">
+            <span className="material-symbols-outlined text-primary text-base">account_balance_wallet</span>
+            <span className={`text-sm font-bold ${isBalanceAnimating ? 'text-green-400' : 'text-slate-200'} transition-colors duration-500`}>
+              ${balance.toFixed(2)}
+            </span>
+          </div>
+        )}
+
+        {/* Notification bell */}
+        <button className="relative size-9 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-white/5 transition-all">
+          <span className="material-symbols-outlined text-xl">notifications</span>
+          <span className="absolute top-1.5 right-1.5 size-2 bg-primary rounded-full"></span>
+        </button>
+
+        {/* Settings */}
+        <button className="size-9 rounded-xl flex items-center justify-center text-slate-400 hover:text-slate-200 hover:bg-white/5 transition-all">
+          <span className="material-symbols-outlined text-xl">settings</span>
+        </button>
+
+        {/* User avatar + dropdown */}
+        <div className="relative" ref={dropdownRef}>
+          <button
+            onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+            className="flex items-center gap-2 p-1 rounded-xl hover:bg-white/5 transition-all"
+          >
+            <div className="size-8 rounded-full bg-gradient-to-br from-primary to-purple-600 flex items-center justify-center text-white text-xs font-bold">
+              {userInitial}
             </div>
+            <span className={`material-symbols-outlined text-slate-500 text-base transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`}>
+              expand_more
+            </span>
+          </button>
 
-            {/* Right Section */}
-            <div className="flex items-center gap-6">
-
-                {/* Balance Display */}
-                {balance !== null && (
-                    <div className="flex flex-col items-end border-r border-slate-800 pr-6">
-                        <span className="text-xs text-slate-500 font-medium">Balance</span>
-                        <div className="flex items-center gap-1.5">
-                            <span className={`text-lg font-bold text-slate-100 ${isBalanceAnimating ? 'text-green-400 animate-pulse' : 'transition-colors duration-500'}`}>
-                                ${balance.toFixed(2)}
-                            </span>
-                        </div>
-                    </div>
-                )}
-
-                <div className="flex items-center gap-4 border-r border-slate-800 pr-6">
-                    <button className="relative text-slate-400 hover:text-slate-100 transition-colors">
-                        <span className="material-symbols-outlined text-xl">notifications</span>
-                        <span className="absolute top-0 right-0 w-2 h-2 bg-primary rounded-full border border-background-dark animate-pulse"></span>
-                    </button>
-                    <button className="text-slate-400 hover:text-slate-100 transition-colors">
-                        <span className="material-symbols-outlined text-xl">chat_bubble</span>
-                    </button>
-                </div>
-
-                {/* User Profile & Dropdown */}
-                <div className="relative" ref={dropdownRef}>
-                    <button
-                        onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                        className="flex items-center gap-3 focus:outline-none hover:opacity-80 transition-opacity"
-                        aria-expanded={isDropdownOpen}
-                        aria-haspopup="true"
-                    >
-                        <div className="text-right hidden sm:block">
-                            <p className="text-sm font-semibold text-slate-100 leading-none">{userName}</p>
-                            <p className="text-xs text-slate-500 mt-1 truncate max-w-[120px]">{user?.email || 'Admin Account'}</p>
-                        </div>
-                        {user?.avatar ? (
-                            <img src={user.avatar} alt="Profile" className="h-10 w-10 rounded-full border-2 border-slate-800 object-cover" />
-                        ) : (
-                            <div className="h-10 w-10 rounded-full bg-gradient-to-br from-primary to-purple-600 flex items-center justify-center text-white font-bold border-2 border-slate-800">
-                                {userInitial}
-                            </div>
-                        )}
-                        <span className={`material-symbols-outlined text-slate-500 transition-transform duration-200 ${isDropdownOpen ? 'rotate-180' : ''}`}>
-                            expand_more
-                        </span>
-                    </button>
-
-                    {/* Dropdown Menu */}
-                    {isDropdownOpen && (
-                        <div className="absolute right-0 mt-3 w-56 rounded-xl border border-slate-800/80 bg-[#151c2c] shadow-xl overflow-hidden py-1 z-50 animate-in fade-in slide-in-from-top-2 duration-200">
-                            <div className="px-4 py-3 border-b border-slate-800/80 mb-1 sm:hidden">
-                                <p className="text-sm font-semibold text-slate-100">{userName}</p>
-                                <p className="text-xs text-slate-500 truncate">{user?.email}</p>
-                            </div>
-
-                            <button
-                                onClick={() => { setIsDropdownOpen(false); router.push('/profile'); }}
-                                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-300 hover:text-slate-100 hover:bg-slate-800/50 transition-colors"
-                            >
-                                <span className="material-symbols-outlined text-[20px]">person</span>
-                                Profile Settings
-                            </button>
-
-                            <button
-                                onClick={() => { setIsDropdownOpen(false); logout(); }}
-                                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-red-400 hover:text-red-300 hover:bg-red-400/10 transition-colors"
-                            >
-                                <span className="material-symbols-outlined text-[20px]">logout</span>
-                                Logout
-                            </button>
-                        </div>
-                    )}
-                </div>
+          {isDropdownOpen && (
+            <div className="absolute right-0 mt-2 w-52 rounded-xl border border-white/8 shadow-xl overflow-hidden py-1 z-50" style={{background: '#151c2a'}}>
+              <div className="px-4 py-3 border-b border-white/5 mb-1">
+                <p className="text-sm font-semibold text-slate-100">{user?.name || 'User'}</p>
+                <p className="text-xs text-slate-500 truncate">{user?.email}</p>
+              </div>
+              <button
+                onClick={() => { setIsDropdownOpen(false); router.push('/profile'); }}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-slate-300 hover:text-slate-100 hover:bg-white/5 transition-colors"
+              >
+                <span className="material-symbols-outlined text-[18px]">person</span>
+                Profile Settings
+              </button>
+              <button
+                onClick={() => { setIsDropdownOpen(false); logout(); }}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-rose-400 hover:text-rose-300 hover:bg-rose-500/10 transition-colors"
+              >
+                <span className="material-symbols-outlined text-[18px]">logout</span>
+                Logout
+              </button>
             </div>
-        </header>
-    );
+          )}
+        </div>
+      </div>
+    </header>
+  );
 }

@@ -1,427 +1,279 @@
 'use client';
-import { useState, useEffect, useRef } from 'react';
-import { fetchStats, fetchCalls, fetchWallet, fetchStartCall, fetchSystemLogs, getAuthHeaders } from '../lib/api';
+import { useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { useAuth } from '@/components/AuthProvider';
+import MarketingNavbar from '@/components/MarketingNavbar';
+import MarketingFooter from '@/components/MarketingFooter';
 
-// Force turbopack to invalidate and pick up new fetchWallet component
-export default function DashboardPage() {
-  const [walletData, setWalletData] = useState(null);
-  const [statsData, setStatsData] = useState(null);
-  const [activeCalls, setActiveCalls] = useState([]);
-  const [standbyCount, setStandbyCount] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [systemLogs, setSystemLogs] = useState([]);
-  const logsEndRef = useRef(null);
+const FEATURES = [
+  { icon: 'mic', title: 'AI Voice Agents', desc: 'Deploy human-like AI agents that handle outbound calls with natural conversation flow and real-time adaptation.', color: 'text-primary', bg: 'bg-primary/10' },
+  { icon: 'campaign', title: 'Smart Campaigns', desc: 'Launch and manage multi-channel calling campaigns with intelligent scheduling, retry logic, and lead scoring.', color: 'text-cyan-400', bg: 'bg-cyan-500/10' },
+  { icon: 'analytics', title: 'Deep Analytics', desc: 'Track every call metric — sentiment, duration, conversion rate, and agent performance in real-time dashboards.', color: 'text-purple-400', bg: 'bg-purple-500/10' },
+];
 
-  // Manual Dispatch State
-  const [dispatchNumber, setDispatchNumber] = useState('');
-  const [dispatchStatus, setDispatchStatus] = useState({ loading: false, error: null, success: false });
+const STEPS = [
+  { num: '01', title: 'Connect Your Data', desc: 'Upload your contact list, connect your CRM, or sync from any source. Our system processes it instantly.' },
+  { num: '02', title: 'Configure Your Agent', desc: 'Choose a voice, set conversation scripts, define goals, and train on your knowledge base documents.' },
+  { num: '03', title: 'Launch & Monitor', desc: 'Start campaigns with one click. Monitor calls live, review transcripts, and iterate based on analytics.' },
+];
 
-  const handleManualDispatch = async () => {
-    if (!dispatchNumber || dispatchNumber.trim() === '') {
-      setDispatchStatus({ loading: false, error: 'Enter a valid phone number', success: false });
-      return;
-    }
+const TESTIMONIALS = [
+  { name: 'Sarah Chen', role: 'VP Sales, TechCorp', quote: 'VoiceAI tripled our outbound call capacity without adding headcount. Our conversion rate improved 40% in the first month.', avatar: 'SC' },
+  { name: 'Marcus Rivera', role: 'CEO, LeadGen Pro', quote: 'The AI voices are indistinguishable from human agents. Our prospects don\'t even realize they\'re talking to AI until we tell them.', avatar: 'MR' },
+];
 
-    setDispatchStatus({ loading: true, error: null, success: false });
+const PLANS = [
+  { name: 'Starter', price: '$49', period: '/mo', features: ['500 AI call minutes', '2 voice agents', 'Basic analytics', 'Email support'], cta: 'Start Free Trial', popular: false },
+  { name: 'Growth', price: '$149', period: '/mo', features: ['2,500 AI call minutes', '10 voice agents', 'Advanced analytics', 'Priority support', 'Custom voices', 'API access'], cta: 'Get Started', popular: true },
+  { name: 'Enterprise', price: 'Custom', period: '', features: ['Unlimited minutes', 'Unlimited agents', 'Custom integrations', 'Dedicated support', 'SLA guarantee', 'White-label option'], cta: 'Contact Sales', popular: false },
+];
 
-    // Assume 'default' campaign for quick testing based on the route
-    try {
-      await fetchStartCall('default', dispatchNumber.trim(), 'en');
-      setDispatchStatus({ loading: false, error: null, success: true });
-      setDispatchNumber(''); // Clear on success
-
-      setTimeout(() => {
-        setDispatchStatus(prev => ({ ...prev, success: false }));
-      }, 3000);
-    } catch (err) {
-      setDispatchStatus({ loading: false, error: err.message, success: false });
-    }
-  };
+export default function LandingPage() {
+  const { user, loading } = useAuth();
+  const router = useRouter();
 
   useEffect(() => {
-    let isMounted = true;
-    let intervalId;
-
-    async function loadDashboardData() {
-      if (!getAuthHeaders().Authorization) return; // skip when not logged in
-      try {
-        const [activeRes, queuedRes] = await Promise.all([
-          fetchCalls({ status: 'in-progress' }),
-          fetchCalls({ status: 'queued' }),
-        ]);
-        const [walletRes, statsRes, logsRes] = await Promise.all([
-          fetchWallet().catch(() => null),
-          fetchStats().catch(() => null),
-          fetchSystemLogs().catch(() => ({ data: [] }))
-        ]);
-
-        if (isMounted) {
-          if (walletRes?.ok) setWalletData(walletRes.data);
-          if (statsRes) setStatsData(statsRes);
-          if (logsRes?.ok) setSystemLogs(logsRes.data || []);
-
-          setActiveCalls(activeRes?.data || []);
-          setStandbyCount(queuedRes?.total || 0);
-          setLoading(false);
-        }
-      } catch (err) {
-        if (err.status === 401) {
-          // Token expired — stop polling; next page load will redirect to login
-          clearInterval(intervalId);
-          return;
-        }
-        console.error("Error loading dashboard data:", err);
-        if (isMounted) setLoading(false);
-      }
+    if (!loading && user) {
+      router.replace('/dashboard');
     }
+  }, [user, loading, router]);
 
-    loadDashboardData();
-    intervalId = setInterval(loadDashboardData, 10000); // Poll every 10s for active calls
-    return () => {
-      isMounted = false;
-      clearInterval(intervalId);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (logsEndRef.current) {
-      logsEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [systemLogs]);
-
-  // Use real data where possible, fallback to 0 or placeholders
-  const totalCalls = walletData?.totalCalls || 0;
-  const leadConversion = statsData?.conversionRate || 0;
-  const activeMinutes = walletData?.totalMinutes || 0;
-  const successRate = walletData?.successRate || 0;
+  if (loading || user) return null;
 
   return (
-    <div className="p-8 max-w-7xl mx-auto">
-      {/* Welcome Section */}
-      <div className="flex justify-between items-end mb-8">
-        <div>
-          <h2 className="text-3xl font-black text-slate-100 tracking-tight">Dashboard Overview</h2>
-          <p className="text-slate-400 mt-2">Real-time performance monitoring for your AI Calling Agents.</p>
-        </div>
-        <button className="flex items-center gap-2 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-sm font-semibold transition-all border border-slate-700">
-          <span className="material-symbols-outlined text-lg">download</span>
-          Export Report
-        </button>
-      </div>
+    <div className="min-h-screen" style={{background: '#0a0e17', fontFamily: '"Space Grotesk", sans-serif'}}>
+      <MarketingNavbar />
 
-      {/* High Level Metrics */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-        <div className="glass p-6 rounded-xl border-l-4 border-primary relative overflow-hidden group">
-          <div className="flex justify-between items-start mb-4 relative z-10">
-            <span className="material-symbols-outlined text-primary bg-primary/10 p-2 rounded-lg">call</span>
-            <span className="text-green-500 text-xs font-bold flex items-center">Live <span className="material-symbols-outlined text-xs ml-1">trending_up</span></span>
-          </div>
-          <p className="text-slate-400 text-sm font-medium relative z-10">Total Calls (Today)</p>
-          <h3 className="text-3xl font-bold text-slate-100 mt-1 tracking-tight relative z-10">
-            {loading ? <span className="animate-pulse bg-slate-700 text-transparent rounded">0000</span> : totalCalls.toLocaleString()}
-          </h3>
+      {/* Hero Section */}
+      <section className="relative pt-40 pb-32 px-6 overflow-hidden">
+        {/* Background glow */}
+        <div className="absolute inset-0 pointer-events-none overflow-hidden">
+          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[800px] h-[600px] rounded-full opacity-20" style={{background: 'radial-gradient(circle, rgba(43,108,238,0.4) 0%, transparent 70%)'}}></div>
+          <div className="absolute top-20 right-20 w-64 h-64 rounded-full opacity-10" style={{background: 'radial-gradient(circle, rgba(139,92,246,0.6) 0%, transparent 70%)'}}></div>
         </div>
 
-        <div className="glass p-6 rounded-xl border-l-4 border-purple-500 relative overflow-hidden">
-          <div className="flex justify-between items-start mb-4 relative z-10">
-            <span className="material-symbols-outlined text-purple-500 bg-purple-500/10 p-2 rounded-lg">target</span>
-            <span className="text-green-500 text-xs font-bold flex items-center">Live <span className="material-symbols-outlined text-xs ml-1">trending_up</span></span>
-          </div>
-          <p className="text-slate-400 text-sm font-medium relative z-10">Lead Conversion</p>
-          <h3 className="text-3xl font-bold text-slate-100 mt-1 tracking-tight relative z-10">
-            {loading ? <span className="animate-pulse bg-slate-700 text-transparent rounded">00.0%</span> : `${leadConversion}%`}
-          </h3>
-        </div>
-
-        <div className="glass p-6 rounded-xl border-l-4 border-cyan-500 relative overflow-hidden">
-          <div className="flex justify-between items-start mb-4 relative z-10">
-            <span className="material-symbols-outlined text-cyan-500 bg-cyan-500/10 p-2 rounded-lg">schedule</span>
-            <span className="text-slate-500 text-xs font-bold flex items-center">Today</span>
-          </div>
-          <p className="text-slate-400 text-sm font-medium relative z-10">Active Minutes</p>
-          <h3 className="text-3xl font-bold text-slate-100 mt-1 tracking-tight relative z-10">
-            {loading ? <span className="animate-pulse bg-slate-700 text-transparent rounded">0000</span> : activeMinutes.toLocaleString()}
-          </h3>
-        </div>
-
-        <div className="glass p-6 rounded-xl border-l-4 border-emerald-500 relative overflow-hidden">
-          <div className="flex justify-between items-start mb-4 relative z-10">
-            <span className="material-symbols-outlined text-emerald-500 bg-emerald-500/10 p-2 rounded-lg">verified</span>
-            <span className="text-green-500 text-xs font-bold flex items-center">Average <span className="material-symbols-outlined text-xs ml-1">trending_up</span></span>
-          </div>
-          <p className="text-slate-400 text-sm font-medium relative z-10">Success Rate</p>
-          <h3 className="text-3xl font-bold text-slate-100 mt-1 tracking-tight relative z-10">
-            {loading ? <span className="animate-pulse bg-slate-700 text-transparent rounded">00.0%</span> : `${successRate}%`}
-          </h3>
-        </div>
-      </div>
-
-      {/* Main Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-        {/* Live Monitor Section */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Live Monitor Table */}
-          <div className="glass rounded-xl overflow-hidden border border-slate-800/50">
-            <div className="px-6 py-4 border-b border-slate-800/50 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <span className="flex h-3 w-3 relative">
-                  {activeCalls.length > 0 && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>}
-                  <span className={`relative inline-flex rounded-full h-3 w-3 ${activeCalls.length > 0 ? 'bg-red-500' : 'bg-slate-500'}`}></span>
-                </span>
-                <h3 className="font-bold text-slate-100">Live Monitor</h3>
-              </div>
-              <div className="flex gap-2">
-                <span className="bg-primary/20 text-primary px-3 py-1 rounded-full text-xs font-bold">{activeCalls.length} Active Calls</span>
-                <span className="bg-slate-800 text-slate-400 px-3 py-1 rounded-full text-xs font-bold">{standbyCount} On Standby</span>
-              </div>
-            </div>
-            <div className="p-0">
-              <div className="overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-slate-800/30 text-slate-400 text-xs uppercase tracking-widest font-bold">
-                      <th className="px-6 py-3">Phone / Lead</th>
-                      <th className="px-6 py-3">Call ID</th>
-                      <th className="px-6 py-3">Status</th>
-                      <th className="px-6 py-3 text-right">Started</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-800/50">
-                    {loading ? (
-                      <tr>
-                        <td colSpan="4" className="px-6 py-8 text-center text-slate-500 text-sm">
-                          Loading active calls data...
-                        </td>
-                      </tr>
-                    ) : activeCalls.length === 0 ? (
-                      <tr>
-                        <td colSpan="4" className="px-6 py-8 text-center text-slate-500 text-sm">
-                          No active calls currently in progress.
-                        </td>
-                      </tr>
-                    ) : activeCalls.map(call => (
-                      <tr key={call._id} className="hover:bg-slate-800/20 transition-colors">
-                        <td className="px-6 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded-full bg-slate-700 flex items-center justify-center text-xs font-bold">
-                              <span className="material-symbols-outlined text-slate-400" style={{ fontSize: '16px' }}>person</span>
-                            </div>
-                            <div>
-                              <div className="text-sm font-semibold text-slate-200">{call.metadata?.name || 'Unknown Lead'}</div>
-                              <div className="text-xs text-slate-400">{call.phoneNumber}</div>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-6 py-4">
-                          <span className="text-sm text-slate-400 font-mono" title={call.callSid}>
-                            {call.callSid ? call.callSid.substring(0, 8) + '...' : 'Unknown'}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4">
-                          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-medium bg-green-500/10 text-green-500 animate-pulse">
-                            In Progress
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 text-right text-sm text-slate-300">
-                          {new Date(call.startAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+        <div className="max-w-5xl mx-auto text-center relative z-10">
+          <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full border border-white/10 text-xs font-bold text-primary bg-primary/5 mb-8 uppercase tracking-widest">
+            <span className="size-1.5 rounded-full bg-primary animate-pulse"></span>
+            Now with Gemini Live Voice AI
           </div>
 
-          {/* Live System Logs Terminal */}
-          <div className="glass p-6 rounded-xl h-64 flex flex-col bg-slate-950 border border-slate-800 shadow-inner">
-            <div className="flex justify-between items-center mb-3">
-              <h3 className="font-mono font-bold text-slate-300 text-sm flex items-center gap-2">
-                <span className="material-symbols-outlined text-[16px]">terminal</span>
-                Backend Runtime Logs
-              </h3>
-              <div className="flex gap-1">
-                <div className="w-3 h-3 rounded-full bg-red-500/80"></div>
-                <div className="w-3 h-3 rounded-full bg-yellow-500/80"></div>
-                <div className="w-3 h-3 rounded-full bg-green-500/80"></div>
-              </div>
-            </div>
+          <h1 className="text-5xl md:text-7xl font-black leading-tight mb-6" style={{background: 'linear-gradient(135deg, #ffffff 0%, #ffffff 50%, #64748b 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text'}}>
+            AI Voice Agents<br />That Actually Convert
+          </h1>
 
-            <div className="flex-1 overflow-y-auto font-mono text-[11px] leading-relaxed text-slate-400 p-2 bg-black/40 rounded border border-slate-800/60 custom-scrollbar">
-              {systemLogs.length === 0 ? (
-                <div className="flex h-full items-center justify-center text-slate-600 animate-pulse">
-                  Listening for system events...
-                </div>
-              ) : (
-                <div className="flex flex-col gap-1">
-                  {systemLogs.slice().reverse().map((log, i) => (
-                    <div key={i} className="flex gap-3 hover:bg-slate-800/40 px-1 py-0.5 rounded break-all">
-                      <span className="text-slate-600 shrink-0">[{new Date(log.ts).toLocaleTimeString()}]</span>
-                      <span className={`shrink-0 font-bold ${log.level === 'ERROR' ? 'text-red-400' : log.level === 'WARN' ? 'text-yellow-400' : log.level === 'DEBUG' ? 'text-purple-400' : 'text-primary'}`}>
-                        {log.level.padEnd(5)}
-                      </span>
-                      <span className={log.level === 'ERROR' ? 'text-red-300' : log.level === 'WARN' ? 'text-yellow-200' : 'text-slate-300'}>
-                        {log.msg || String(log.text || '')} {log.callSid && <span className="text-slate-500 ml-1">({log.callSid.substring(0, 8)})</span>}
-                      </span>
-                    </div>
-                  ))}
-                  <div ref={logsEndRef} />
-                </div>
-              )}
-            </div>
+          <p className="text-lg text-slate-400 max-w-2xl mx-auto mb-10 leading-relaxed">
+            Deploy intelligent AI calling agents in minutes. Automate outbound campaigns, qualify leads, and close deals — all with human-like voice conversations at scale.
+          </p>
+
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <Link href="/signup" className="px-8 py-4 rounded-2xl bg-primary text-white text-sm font-bold hover:bg-primary/90 transition-all active:scale-95" style={{boxShadow: '0 8px 30px rgba(43,108,238,0.4)'}}>
+              Start Free — No Credit Card
+            </Link>
+            <Link href="/demo" className="px-8 py-4 rounded-2xl border border-white/10 text-slate-300 text-sm font-bold hover:bg-white/5 transition-all flex items-center gap-2">
+              <span className="material-symbols-outlined text-base">play_circle</span>
+              Watch Demo
+            </Link>
           </div>
 
-          {/* Make a Call Action Block */}
-          <div className="glass p-6 rounded-xl border border-primary/30 bg-primary/5 relative overflow-hidden group">
-            <div className="absolute -right-10 -bottom-10 opacity-10 group-hover:opacity-20 transition-opacity">
-              <span className="material-symbols-outlined text-[120px] text-primary">phone_in_talk</span>
-            </div>
-            <div className="relative z-10 flex flex-col md:flex-row items-start md:items-center justify-between gap-6">
-              <div>
-                <h3 className="font-black text-xl text-slate-100 mb-1 flex items-center gap-2">
-                  <span className="material-symbols-outlined text-primary">dialpad</span>
-                  Manual Agent Dispatch
-                </h3>
-                <p className="text-sm text-slate-400">Instantly deploy an AI agent to dial any requested number for immediate testing or hot leads.</p>
+          <p className="text-xs text-slate-600 mt-6">14-day free trial · No setup fees · Cancel anytime</p>
+
+          {/* Hero Visual */}
+          <div className="mt-16 rounded-3xl border border-white/8 overflow-hidden shadow-2xl relative" style={{background: 'rgba(255,255,255,0.02)'}}>
+            <div className="p-1.5 border-b border-white/5" style={{background: 'rgba(255,255,255,0.03)'}}>
+              <div className="flex items-center gap-1.5 px-3">
+                <div className="size-3 rounded-full bg-rose-500/60"></div>
+                <div className="size-3 rounded-full bg-amber-500/60"></div>
+                <div className="size-3 rounded-full bg-emerald-500/60"></div>
+                <span className="text-xs text-slate-700 ml-3 font-mono">voiceai.app/dashboard</span>
               </div>
-              <div className="flex flex-col w-full md:w-auto">
-                <div className="flex w-full md:w-auto items-center gap-2 bg-slate-900 border border-slate-700/50 rounded-xl p-1.5 shadow-inner">
-                  <div className="relative flex-1 md:w-48">
-                    <span className="material-symbols-outlined absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-[18px]">call</span>
-                    <input
-                      type="tel"
-                      placeholder="+1 (555) 000-0000"
-                      value={dispatchNumber}
-                      onChange={(e) => setDispatchNumber(e.target.value)}
-                      className={`w-full bg-transparent border-none text-sm font-medium text-slate-200 placeholder:text-slate-600 focus:ring-0 pl-10 py-2.5 ${dispatchStatus.error ? 'text-red-400' : ''}`}
-                      disabled={dispatchStatus.loading || dispatchStatus.success}
-                    />
+            </div>
+            <div className="p-8 grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {[
+                { label: 'Active Agents', value: '12', icon: 'mic', change: '+3 today', color: 'text-primary' },
+                { label: 'Calls Today', value: '1,247', icon: 'call', change: '↑ 18%', color: 'text-emerald-400' },
+                { label: 'Conversions', value: '23.5%', icon: 'trending_up', change: '↑ 5.2%', color: 'text-purple-400' },
+              ].map(stat => (
+                <div key={stat.label} className="rounded-2xl border border-white/8 p-5" style={{background: 'rgba(255,255,255,0.03)'}}>
+                  <div className="flex items-center justify-between mb-3">
+                    <span className={`material-symbols-outlined text-xl ${stat.color}`}>{stat.icon}</span>
+                    <span className="text-[10px] font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded-full">{stat.change}</span>
                   </div>
-                  <button
-                    onClick={handleManualDispatch}
-                    disabled={dispatchStatus.loading || dispatchStatus.success || !dispatchNumber}
-                    className={`font-bold text-sm px-6 py-2.5 rounded-lg shadow-lg transition-all flex items-center gap-2 flex-shrink-0 disabled:opacity-50 disabled:cursor-not-allowed
-                            ${dispatchStatus.success ? 'bg-emerald-500 text-white shadow-emerald-500/20' :
-                        dispatchStatus.error ? 'bg-red-500 text-white shadow-red-500/20 hover:bg-red-600' :
-                          'bg-primary hover:bg-primary/90 text-white shadow-primary/20'}
-                        `}
-                  >
-                    {dispatchStatus.loading ? (
-                      <>
-                        <span className="material-symbols-outlined text-[18px] animate-spin">sync</span>
-                        Calling...
-                      </>
-                    ) : dispatchStatus.success ? (
-                      <>
-                        <span className="material-symbols-outlined text-[18px]">check_circle</span>
-                        Dispatched
-                      </>
-                    ) : (
-                      <>
-                        Call Now
-                        <span className="material-symbols-outlined text-[18px]">arrow_forward</span>
-                      </>
-                    )}
-                  </button>
+                  <p className="text-2xl font-black text-slate-100">{stat.value}</p>
+                  <p className="text-xs text-slate-600 mt-0.5">{stat.label}</p>
                 </div>
-                {dispatchStatus.error && (
-                  <p className="text-xs text-red-400 mt-2 font-medium px-2 flex items-center gap-1">
-                    <span className="material-symbols-outlined text-[14px]">error</span>
-                    {dispatchStatus.error}
-                  </p>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Features */}
+      <section className="py-24 px-6 border-t border-white/5">
+        <div className="max-w-6xl mx-auto">
+          <div className="text-center mb-16">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-primary mb-4">Platform Features</p>
+            <h2 className="text-4xl md:text-5xl font-black text-slate-100 mb-4">Everything you need to scale</h2>
+            <p className="text-slate-500 text-lg max-w-2xl mx-auto">A complete platform for intelligent voice automation — from agent creation to analytics.</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {FEATURES.map(f => (
+              <div key={f.title} className="rounded-3xl border border-white/8 p-8 group hover:-translate-y-1 transition-all duration-300" style={{background: 'rgba(255,255,255,0.02)'}}>
+                <div className={`size-14 rounded-2xl flex items-center justify-center mb-6 ${f.bg}`}>
+                  <span className={`material-symbols-outlined text-2xl ${f.color}`}>{f.icon}</span>
+                </div>
+                <h3 className="text-xl font-bold text-slate-100 mb-3">{f.title}</h3>
+                <p className="text-slate-500 text-sm leading-relaxed">{f.desc}</p>
+              </div>
+            ))}
+          </div>
+          <div className="mt-10 text-center">
+            <Link href="/features" className="inline-flex items-center gap-2 text-sm font-semibold text-primary hover:text-primary/80 transition-colors">
+              See all features <span className="material-symbols-outlined text-base">arrow_forward</span>
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      {/* How It Works */}
+      <section className="py-24 px-6 border-t border-white/5">
+        <div className="max-w-5xl mx-auto">
+          <div className="text-center mb-16">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-primary mb-4">How It Works</p>
+            <h2 className="text-4xl md:text-5xl font-black text-slate-100 mb-4">Up and running in 15 minutes</h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+            {STEPS.map((step, i) => (
+              <div key={step.num} className="relative">
+                {i < STEPS.length - 1 && (
+                  <div className="hidden md:block absolute top-8 left-full w-full h-px" style={{background: 'linear-gradient(90deg, rgba(43,108,238,0.4), transparent)'}}></div>
                 )}
+                <div className="rounded-3xl border border-white/8 p-8" style={{background: 'rgba(255,255,255,0.02)'}}>
+                  <span className="text-5xl font-black text-white/5 block mb-4 leading-none">{step.num}</span>
+                  <h3 className="text-lg font-bold text-slate-100 mb-3">{step.title}</h3>
+                  <p className="text-slate-500 text-sm leading-relaxed">{step.desc}</p>
+                </div>
               </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* Stats */}
+      <section className="py-20 px-6 border-t border-white/5">
+        <div className="max-w-5xl mx-auto">
+          <div className="rounded-3xl border border-primary/20 p-12 text-center relative overflow-hidden" style={{background: 'linear-gradient(135deg, rgba(43,108,238,0.08), rgba(139,92,246,0.05))'}}>
+            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-96 h-32 rounded-full opacity-20" style={{background: 'radial-gradient(circle, rgba(43,108,238,0.8), transparent)'}}></div>
+            <div className="relative z-10 grid grid-cols-1 sm:grid-cols-3 gap-10">
+              {[
+                { value: '10M+', label: 'Calls Processed' },
+                { value: '98.5%', label: 'Uptime SLA' },
+                { value: '3.2×', label: 'Avg Conversion Lift' },
+              ].map(stat => (
+                <div key={stat.label}>
+                  <p className="text-5xl font-black text-white mb-2">{stat.value}</p>
+                  <p className="text-sm text-slate-500 font-medium">{stat.label}</p>
+                </div>
+              ))}
             </div>
           </div>
         </div>
+      </section>
 
-        {/* Side Stats / Quick Actions */}
-        <div className="space-y-6">
-          {/* Top Performing Agent */}
-          <div className="glass p-6 rounded-xl border border-slate-800/50">
-            <h3 className="font-bold text-slate-100 mb-6">Top Agent Stats</h3>
-            <div className="flex items-center gap-4 mb-6">
-              <div className="w-16 h-16 rounded-full bg-primary/20 p-1">
-                <div className="w-full h-full rounded-full bg-slate-800 flex items-center justify-center">
-                  <span className="material-symbols-outlined text-primary text-2xl">smart_toy</span>
-                </div>
-              </div>
-              <div>
-                <p className="text-lg font-bold text-slate-100">Aria - Closer Pro</p>
-                <p className="text-xs text-slate-500 font-medium">Model: Turbo-X</p>
-              </div>
-            </div>
-            <div className="space-y-4">
-              <div>
-                <div className="flex justify-between text-xs font-bold mb-1.5">
-                  <span className="text-slate-400">Conversion Rate</span>
-                  <span className="text-primary">{leadConversion > 0 ? leadConversion : 24.8}%</span>
-                </div>
-                <div className="w-full bg-slate-800 rounded-full h-2">
-                  <div className="bg-primary h-2 rounded-full transition-all duration-1000" style={{ width: `${leadConversion > 0 ? leadConversion : 24.8}%` }}></div>
-                </div>
-              </div>
-              <div>
-                <div className="flex justify-between text-xs font-bold mb-1.5">
-                  <span className="text-slate-400">System Sentiment Score</span>
-                  <span className="text-purple-500">92/100</span>
-                </div>
-                <div className="w-full bg-slate-800 rounded-full h-2">
-                  <div className="bg-purple-500 h-2 rounded-full" style={{ width: '92%' }}></div>
-                </div>
-              </div>
-            </div>
+      {/* Testimonials */}
+      <section className="py-24 px-6 border-t border-white/5">
+        <div className="max-w-5xl mx-auto">
+          <div className="text-center mb-12">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-primary mb-4">Testimonials</p>
+            <h2 className="text-4xl font-black text-slate-100">Loved by sales teams</h2>
           </div>
-
-          {/* Quick Knowledge Base Links */}
-          <div className="glass p-6 rounded-xl border border-slate-800/50">
-            <h3 className="font-bold text-slate-100 mb-4">Quick Resources</h3>
-            <ul className="space-y-3">
-              <li>
-                <a className="group flex items-center justify-between p-3 rounded-lg hover:bg-slate-800/50 transition-all border border-transparent hover:border-slate-700" href="/knowledge-bases">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-slate-400 group-hover:text-primary">menu_book</span>
-                    <span className="text-sm font-medium text-slate-300">OBJECTION SCRIPTS</span>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            {TESTIMONIALS.map(t => (
+              <div key={t.name} className="rounded-3xl border border-white/8 p-8" style={{background: 'rgba(255,255,255,0.02)'}}>
+                <div className="flex gap-1 mb-6">
+                  {[...Array(5)].map((_, i) => (
+                    <span key={i} className="material-symbols-outlined text-amber-400 text-base fill-1">star</span>
+                  ))}
+                </div>
+                <p className="text-slate-300 text-base leading-relaxed mb-6 italic">&ldquo;{t.quote}&rdquo;</p>
+                <div className="flex items-center gap-3">
+                  <div className="size-10 rounded-full bg-gradient-to-br from-primary to-purple-600 flex items-center justify-center text-white text-sm font-bold">
+                    {t.avatar}
                   </div>
-                  <span className="material-symbols-outlined text-slate-600 text-sm">arrow_forward</span>
-                </a>
-              </li>
-              <li>
-                <a className="group flex items-center justify-between p-3 rounded-lg hover:bg-slate-800/50 transition-all border border-transparent hover:border-slate-700" href="/knowledge-bases">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-slate-400 group-hover:text-primary">apartment</span>
-                    <span className="text-sm font-medium text-slate-300">LISTING DATA FEED</span>
+                  <div>
+                    <p className="text-sm font-bold text-slate-200">{t.name}</p>
+                    <p className="text-xs text-slate-500">{t.role}</p>
                   </div>
-                  <span className="material-symbols-outlined text-slate-600 text-sm">arrow_forward</span>
-                </a>
-              </li>
-              <li>
-                <a className="group flex items-center justify-between p-3 rounded-lg hover:bg-slate-800/50 transition-all border border-transparent hover:border-slate-700" href="/voice">
-                  <div className="flex items-center gap-3">
-                    <span className="material-symbols-outlined text-slate-400 group-hover:text-primary">record_voice_over</span>
-                    <span className="text-sm font-medium text-slate-300">VOICE PRESETS</span>
-                  </div>
-                  <span className="material-symbols-outlined text-slate-600 text-sm">arrow_forward</span>
-                </a>
-              </li>
-            </ul>
-          </div>
-
-          {/* Automated Optimization Card */}
-          <div className="bg-gradient-to-br from-primary/10 to-purple-600/10 p-6 rounded-xl border border-primary/20 relative overflow-hidden group">
-            <div className="relative z-10">
-              <h3 className="font-bold text-slate-100 mb-2">Automated Optimization</h3>
-              <p className="text-xs text-slate-400 mb-4">AI is currently re-learning objection handling from {totalCalls > 500 ? totalCalls : 524} recent call transcripts.</p>
-              <button className="w-full py-2 bg-white/5 hover:bg-white/10 text-slate-100 rounded-lg text-xs font-bold transition-all border border-white/10">
-                View Training Logs
-              </button>
-            </div>
-            <div className="absolute -right-4 -bottom-4 opacity-10 group-hover:opacity-20 transition-opacity">
-              <span className="material-symbols-outlined text-9xl">psychology</span>
-            </div>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
-      </div>
+      </section>
+
+      {/* Pricing */}
+      <section className="py-24 px-6 border-t border-white/5">
+        <div className="max-w-5xl mx-auto">
+          <div className="text-center mb-16">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-primary mb-4">Pricing</p>
+            <h2 className="text-4xl md:text-5xl font-black text-slate-100 mb-4">Simple, transparent pricing</h2>
+            <p className="text-slate-500">Start free. Scale as you grow.</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+            {PLANS.map(plan => (
+              <div key={plan.name} className={`rounded-3xl border p-8 relative ${plan.popular ? 'border-primary/40' : 'border-white/8'}`} style={plan.popular ? {background: 'rgba(43,108,238,0.05)'} : {background: 'rgba(255,255,255,0.02)'}}>
+                {plan.popular && (
+                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 px-4 py-1 rounded-full bg-primary text-white text-[10px] font-bold uppercase tracking-wider">
+                    Most Popular
+                  </div>
+                )}
+                <h3 className="text-lg font-bold text-slate-200 mb-2">{plan.name}</h3>
+                <div className="flex items-baseline gap-1 mb-6">
+                  <span className="text-4xl font-black text-white">{plan.price}</span>
+                  <span className="text-slate-500 text-sm">{plan.period}</span>
+                </div>
+                <ul className="space-y-3 mb-8">
+                  {plan.features.map(f => (
+                    <li key={f} className="flex items-center gap-2.5 text-sm text-slate-400">
+                      <span className="material-symbols-outlined text-emerald-400 text-base">check_circle</span>
+                      {f}
+                    </li>
+                  ))}
+                </ul>
+                <Link href={plan.name === 'Enterprise' ? '/contact' : '/signup'}
+                  className={`w-full block text-center py-3 rounded-2xl text-sm font-bold transition-all ${
+                    plan.popular
+                      ? 'bg-primary text-white hover:bg-primary/90'
+                      : 'border border-white/10 text-slate-300 hover:bg-white/5'
+                  }`}
+                  style={plan.popular ? {boxShadow: '0 4px 20px rgba(43,108,238,0.3)'} : {}}
+                >
+                  {plan.cta}
+                </Link>
+              </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* CTA */}
+      <section className="py-24 px-6 border-t border-white/5">
+        <div className="max-w-3xl mx-auto text-center">
+          <h2 className="text-4xl md:text-5xl font-black text-white mb-6">Ready to scale your outbound?</h2>
+          <p className="text-slate-500 text-lg mb-10">Join thousands of sales teams using VoiceAI to automate and supercharge their outbound calling.</p>
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+            <Link href="/signup" className="px-8 py-4 rounded-2xl bg-primary text-white text-sm font-bold hover:bg-primary/90 transition-all" style={{boxShadow: '0 8px 30px rgba(43,108,238,0.4)'}}>
+              Start Free Trial
+            </Link>
+            <Link href="/contact" className="px-8 py-4 rounded-2xl border border-white/10 text-slate-300 text-sm font-bold hover:bg-white/5 transition-all">
+              Talk to Sales
+            </Link>
+          </div>
+        </div>
+      </section>
+
+      <MarketingFooter />
     </div>
   );
 }

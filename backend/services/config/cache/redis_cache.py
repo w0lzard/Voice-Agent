@@ -5,24 +5,35 @@ import logging
 from typing import Optional, Any
 
 import redis.asyncio as redis
+from shared.redis_config import get_redis_url
 
 logger = logging.getLogger("config-service.cache")
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
-CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))  # 5 minutes default
+REDIS_URL = get_redis_url()
+CACHE_TTL = int(os.getenv("CACHE_TTL", "300"))
 
 
 class RedisCache:
     """Redis cache for fast config access."""
     
     _client: Optional[redis.Redis] = None
+    _disabled_logged: bool = False
     
     @classmethod
     async def connect(cls):
         """Connect to Redis."""
-        if cls._client is None:
+        if cls._client is not None or not REDIS_URL:
+            if cls._client is None and not REDIS_URL and not cls._disabled_logged:
+                logger.info("Configuration cache Redis not configured; cache disabled")
+                cls._disabled_logged = True
+            return
+        try:
             cls._client = redis.from_url(REDIS_URL, decode_responses=True)
+            await cls._client.ping()
             logger.info(f"Connected to Redis: {REDIS_URL}")
+        except Exception as e:
+            logger.warning(f"Configuration cache Redis connection failed: {e}")
+            cls._client = None
     
     @classmethod
     async def disconnect(cls):
@@ -40,7 +51,8 @@ class RedisCache:
                 await cls._client.ping()
                 return True
         except Exception as e:
-            logger.error(f"Redis ping failed: {e}")
+            cls._client = None
+            logger.debug(f"Redis ping failed: {e}")
         return False
     
     @classmethod
@@ -52,7 +64,8 @@ class RedisCache:
                 if data:
                     return json.loads(data)
         except Exception as e:
-            logger.error(f"Cache get error: {e}")
+            cls._client = None
+            logger.debug(f"Cache get error: {e}")
         return None
     
     @classmethod
@@ -63,7 +76,8 @@ class RedisCache:
                 await cls._client.setex(key, ttl, json.dumps(value, default=str))
                 logger.debug(f"Cached: {key}")
         except Exception as e:
-            logger.error(f"Cache set error: {e}")
+            cls._client = None
+            logger.debug(f"Cache set error: {e}")
     
     @classmethod
     async def delete(cls, key: str):
@@ -73,7 +87,8 @@ class RedisCache:
                 await cls._client.delete(key)
                 logger.debug(f"Cache deleted: {key}")
         except Exception as e:
-            logger.error(f"Cache delete error: {e}")
+            cls._client = None
+            logger.debug(f"Cache delete error: {e}")
     
     @classmethod
     async def invalidate_pattern(cls, pattern: str):
@@ -85,7 +100,8 @@ class RedisCache:
                     await cls._client.delete(*keys)
                     logger.info(f"Invalidated {len(keys)} keys matching: {pattern}")
         except Exception as e:
-            logger.error(f"Cache invalidate error: {e}")
+            cls._client = None
+            logger.debug(f"Cache invalidate error: {e}")
     
     # Convenience methods for config types
     @classmethod

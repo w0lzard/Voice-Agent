@@ -2,17 +2,19 @@
 Session cache module for caching user data in Redis on login.
 Provides fast access to user profile, workspace, assistants, phones, calls, etc.
 """
-import os
 import json
 import logging
+import time
 from typing import Optional, Any, List, Dict
 from datetime import datetime, timezone
 
 import redis.asyncio as redis
+from shared.redis_config import get_redis_url
 
 logger = logging.getLogger("session-cache")
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+REDIS_URL = get_redis_url()
+REDIS_RETRY_INTERVAL = 30
 
 # TTL configurations (in seconds)
 TTL_USER_PROFILE = 3600      # 1 hour
@@ -41,18 +43,30 @@ class SessionCache:
     """
     
     _client: Optional[redis.Redis] = None
+    _last_connect_attempt: float = 0.0
+    _disabled_logged: bool = False
     
     @classmethod
     async def connect(cls) -> None:
         """Connect to Redis."""
-        if cls._client is None:
-            try:
-                cls._client = redis.from_url(REDIS_URL, decode_responses=True)
-                await cls._client.ping()
-                logger.info(f"SessionCache connected to Redis: {REDIS_URL}")
-            except Exception as e:
-                logger.warning(f"SessionCache Redis connection failed: {e}")
-                cls._client = None
+        if cls._client is not None:
+            return
+        if not REDIS_URL:
+            if not cls._disabled_logged:
+                logger.info("SessionCache Redis not configured; cache disabled")
+                cls._disabled_logged = True
+            return
+        now = time.monotonic()
+        if now - cls._last_connect_attempt < REDIS_RETRY_INTERVAL:
+            return
+        cls._last_connect_attempt = now
+        try:
+            cls._client = redis.from_url(REDIS_URL, decode_responses=True)
+            await cls._client.ping()
+            logger.info(f"SessionCache connected to Redis: {REDIS_URL}")
+        except Exception as e:
+            logger.warning(f"SessionCache Redis connection failed: {e}")
+            cls._client = None
     
     @classmethod
     async def disconnect(cls) -> None:
@@ -83,7 +97,8 @@ class SessionCache:
                 return json.loads(data)
             logger.debug(f"Cache MISS: {key}")
         except Exception as e:
-            logger.error(f"Cache get error for {key}: {e}")
+            cls._client = None
+            logger.debug(f"Cache get error for {key}: {e}")
         return None
     
     @classmethod
@@ -95,7 +110,8 @@ class SessionCache:
             await cls._client.setex(key, ttl, json.dumps(value, default=str))
             logger.debug(f"Cache SET: {key} (TTL: {ttl}s)")
         except Exception as e:
-            logger.error(f"Cache set error for {key}: {e}")
+            cls._client = None
+            logger.debug(f"Cache set error for {key}: {e}")
     
     @classmethod
     async def delete(cls, key: str) -> None:
@@ -106,7 +122,8 @@ class SessionCache:
             await cls._client.delete(key)
             logger.debug(f"Cache DELETE: {key}")
         except Exception as e:
-            logger.error(f"Cache delete error for {key}: {e}")
+            cls._client = None
+            logger.debug(f"Cache delete error for {key}: {e}")
     
     @classmethod
     async def delete_pattern(cls, pattern: str) -> None:
@@ -119,7 +136,8 @@ class SessionCache:
                 await cls._client.delete(*keys)
                 logger.info(f"Cache INVALIDATED: {len(keys)} keys matching '{pattern}'")
         except Exception as e:
-            logger.error(f"Cache delete pattern error for {pattern}: {e}")
+            cls._client = None
+            logger.debug(f"Cache delete pattern error for {pattern}: {e}")
     
     # ==================== Session Preload ====================
     

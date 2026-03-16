@@ -1,22 +1,12 @@
 "use client";
 
 export default function Loading() {
-    return (
-        <div style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-            <div className="spinner"></div>
-            <style jsx>{`
-        .spinner {
-          width: 40px;
-          height: 40px;
-          border: 4px solid rgba(255,255,255,0.1);
-          border-left-color: var(--accent);
-          border-radius: 50%;
-          animation: spin 1s linear infinite;
-        }
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-      `}</style>
-        </div>
-    );
+  return (
+    <div className="flex items-center justify-center h-full py-20">
+      <div className="flex flex-col items-center gap-3">
+        <div className="size-10 rounded-full border-4 border-white/10 border-t-primary animate-spin"></div>
+        <p className="text-xs text-slate-600 font-medium uppercase tracking-widest">Loading...</p>
+      </div>
+    </div>
+  );
 }
