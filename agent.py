@@ -906,6 +906,7 @@ async def _speak_scripted_line(
     *,
     text: str,
     realtime_audio: bool,
+    allow_interruptions: bool = True,
 ) -> None:
     """Play a scripted line.
 
@@ -914,6 +915,12 @@ async def _speak_scripted_line(
     voice without going through a separate TTS provider.
 
     Pipeline (STT → LLM → TTS): uses session.say() to bypass the LLM.
+
+    allow_interruptions=False for the opening greeting prevents user speech from
+    interrupting mid-sentence.  An interruption during generate_reply corrupts
+    Gemini Live's turn-detection state machine, causing permanent silence.
+    Gemini still receives user audio while the greeting plays; it queues the
+    response and delivers it naturally once the greeting finishes.
     """
     if realtime_audio:
         reply_kwargs: dict = {
@@ -921,7 +928,7 @@ async def _speak_scripted_line(
                 f"This is the opening of the call — NOT a reply to the user. "
                 f"Deliver this greeting naturally without any leading filler word: {text}"
             ),
-            "allow_interruptions": True,
+            "allow_interruptions": allow_interruptions,
             "input_modality": "text",
         }
         if _get_realtime_provider() != "google":
@@ -929,7 +936,7 @@ async def _speak_scripted_line(
         await session.generate_reply(**reply_kwargs)
         return
 
-    await session.say(text, allow_interruptions=True, add_to_chat_ctx=True)
+    await session.say(text, allow_interruptions=allow_interruptions, add_to_chat_ctx=True)
 
 
 async def _reject_busy_inbound(ctx: agents.JobContext) -> None:
@@ -1371,7 +1378,12 @@ async def entrypoint(ctx: agents.JobContext):
                     logger.info("Greeting aborted mid-retry: SIP call failed.")
                     return
                 try:
-                    await _speak_scripted_line(session, text=first_message, realtime_audio=realtime_audio)
+                    await _speak_scripted_line(
+                        session,
+                        text=first_message,
+                        realtime_audio=realtime_audio,
+                        allow_interruptions=False,  # greeting must play to completion
+                    )
                     logger.info("Initial greeting sent.")
                     break
                 except asyncio.CancelledError:
