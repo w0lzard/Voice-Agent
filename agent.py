@@ -3,6 +3,7 @@ import logging
 import os
 import json
 import time
+import threading
 from pathlib import Path
 from dotenv import load_dotenv
 from openai.types.beta.realtime.session import InputAudioTranscription, TurnDetection
@@ -46,6 +47,13 @@ logger = logging.getLogger("outbound-agent")
 # TRUNK ID - This needs to be set after you crate your trunk
 # You can find this by running 'python setup_trunk.py --list' or checking LiveKit Dashboard
 OUTBOUND_TRUNK_ID = os.getenv("OUTBOUND_TRUNK_ID")
+
+# In-process cache for resolved non-direct trunk IDs (name/number lookup).
+# Avoids a LiveKit list_outbound_trunk API round-trip (100-300ms) on every call.
+# Credential sync via _sync_trunk_credentials still runs separately per call.
+_trunk_id_cache: dict[str, tuple[str, float]] = {}
+_TRUNK_CACHE_TTL = float(os.getenv("TRUNK_CACHE_TTL_SEC", "3600"))
+_trunk_cache_lock = threading.Lock()
 
 
 def _normalize_domain(value: str | None) -> str | None:
@@ -318,6 +326,14 @@ async def _resolve_outbound_trunk_id(ctx: agents.JobContext, configured: str | N
 
     requested = (configured or "").strip()
     caller_number = os.getenv("VOBIZ_CALLER_ID") or os.getenv("VOBIZ_OUTBOUND_NUMBER")
+    cache_key = f"{requested}:{caller_number or ''}"
+
+    # Return cached trunk ID to skip the list_outbound_trunk API call (~100-300ms).
+    with _trunk_cache_lock:
+        cached = _trunk_id_cache.get(cache_key)
+        if cached and (time.time() - cached[1]) < _TRUNK_CACHE_TTL:
+            logger.debug(f"Trunk cache hit '{cache_key}': {cached[0]}")
+            return cached[0]
 
     try:
         trunks = await ctx.api.sip.list_outbound_trunk(api.ListSIPOutboundTrunkRequest())
@@ -325,32 +341,42 @@ async def _resolve_outbound_trunk_id(ctx: agents.JobContext, configured: str | N
         logger.error(f"Failed to list outbound trunks: {e}")
         return configured
 
-    if not trunks.items:
-        return await _ensure_outbound_trunk(ctx)
+    trunk_id: str | None = None
 
-    # 1) Match by trunk id/name when non-ST value is provided
-    if requested:
+    if not trunks.items:
+        trunk_id = await _ensure_outbound_trunk(ctx)
+    elif requested:
+        # 1) Match by trunk id/name when non-ST value is provided
         for trunk in trunks.items:
             if trunk.sip_trunk_id == requested or trunk.name == requested:
                 logger.info(f"Resolved outbound trunk '{requested}' -> {trunk.sip_trunk_id}")
-                return await _ensure_outbound_trunk(ctx)
+                trunk_id = await _ensure_outbound_trunk(ctx)
+                break
 
-    # 2) Match by caller number
-    if caller_number:
+    if trunk_id is None and caller_number:
+        # 2) Match by caller number
         for trunk in trunks.items:
             if getattr(trunk, "numbers", None) and caller_number in trunk.numbers:
                 logger.info(f"Resolved outbound trunk by caller number {caller_number} -> {trunk.sip_trunk_id}")
-                return await _ensure_outbound_trunk(ctx)
+                trunk_id = await _ensure_outbound_trunk(ctx)
+                break
 
-    # 3) Try to create/fetch trunk using VoBiz credentials
-    created_or_found = await _ensure_outbound_trunk(ctx)
-    if _is_trunk_id(created_or_found):
-        return created_or_found
+    if trunk_id is None:
+        # 3) Try to create/fetch trunk using VoBiz credentials
+        created_or_found = await _ensure_outbound_trunk(ctx)
+        if _is_trunk_id(created_or_found):
+            trunk_id = created_or_found
 
-    # 4) Fallback to first configured trunk
-    fallback = trunks.items[0].sip_trunk_id
-    logger.warning(f"Using fallback outbound trunk: {fallback}")
-    return fallback
+    if trunk_id is None and trunks.items:
+        # 4) Fallback to first configured trunk
+        trunk_id = trunks.items[0].sip_trunk_id
+        logger.warning(f"Using fallback outbound trunk: {trunk_id}")
+
+    if trunk_id:
+        with _trunk_cache_lock:
+            _trunk_id_cache[cache_key] = (trunk_id, time.time())
+
+    return trunk_id
 
 
 def _build_tts():

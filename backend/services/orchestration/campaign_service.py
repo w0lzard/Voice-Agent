@@ -3,6 +3,7 @@ Campaign service for batch calling operations.
 """
 import asyncio
 import logging
+import os
 from datetime import datetime, timezone
 from typing import Optional, List, Dict, Any
 
@@ -206,9 +207,12 @@ class CampaignService:
                         )
                         
                         logger.info(f"Campaign {campaign_id}: Called {contact.phone_number}")
-                        
-                        # Wait between calls to avoid overwhelming
-                        await asyncio.sleep(2)
+
+                        # Configurable inter-call delay to avoid overwhelming the SIP trunk.
+                        # Default is 0.5 s (down from 2 s) — tune via CAMPAIGN_INTER_CALL_DELAY_SEC.
+                        inter_call_delay = float(os.getenv("CAMPAIGN_INTER_CALL_DELAY_SEC", "0.5"))
+                        if inter_call_delay > 0:
+                            await asyncio.sleep(inter_call_delay)
                         
                     except Exception as e:
                         logger.error(f"Campaign {campaign_id}: Failed to call {contact.phone_number}: {e}")
