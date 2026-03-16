@@ -6,6 +6,8 @@ import os
 import time
 import logging
 from typing import Optional, Callable
+
+_REDIS_RETRY_INTERVAL = 30  # seconds between reconnection attempts when Redis is down
 from fastapi import Request, HTTPException, status
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
@@ -28,6 +30,7 @@ class RateLimiter:
         self.default_limit = default_limit  # requests per window
         self.default_window = default_window  # window in seconds
         self._client: Optional[redis.Redis] = None
+        self._last_connect_attempt: float = 0.0  # throttle reconnection attempts
         
         # Endpoint-specific limits
         self.endpoint_limits = {
@@ -44,15 +47,20 @@ class RateLimiter:
         }
     
     async def connect(self) -> None:
-        """Connect to Redis."""
-        if self._client is None:
-            try:
-                self._client = redis.from_url(self.redis_url, decode_responses=True)
-                await self._client.ping()
-                logger.info("RateLimiter connected to Redis")
-            except Exception as e:
-                logger.warning(f"RateLimiter Redis connection failed: {e}")
-                self._client = None
+        """Connect to Redis, with cooldown to avoid log spam when Redis is unavailable."""
+        if self._client is not None:
+            return
+        now = time.monotonic()
+        if now - self._last_connect_attempt < _REDIS_RETRY_INTERVAL:
+            return  # still within cooldown — skip silently
+        self._last_connect_attempt = now
+        try:
+            self._client = redis.from_url(self.redis_url, decode_responses=True)
+            await self._client.ping()
+            logger.info("RateLimiter connected to Redis")
+        except Exception as e:
+            logger.warning("RateLimiter Redis unavailable (%s) — rate limiting disabled, will retry in %ds", e, _REDIS_RETRY_INTERVAL)
+            self._client = None
     
     async def is_allowed(self, key: str, limit: int, window: int) -> tuple[bool, int, int]:
         """
@@ -85,8 +93,11 @@ class RateLimiter:
             return count <= limit, remaining, reset_time
             
         except Exception as e:
-            logger.error(f"Rate limit check failed: {e}")
-            return True, limit, 0  # Fail open
+            # Redis dropped — reset client so next request triggers a fresh connect attempt
+            # (subject to cooldown). Fail open so requests are not blocked.
+            self._client = None
+            logger.debug("Rate limit check failed, failing open: %s", e)
+            return True, limit, 0
     
     def get_limit_for_path(self, path: str) -> tuple[int, int]:
         """Get rate limit configuration for a path."""

@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
 
-import google.generativeai as genai
+from google import genai
 
 from shared.database.models import CallRecord, CallAnalysis
 from shared.database.connection import get_database
@@ -69,13 +69,12 @@ Respond ONLY with the JSON, no other text."""
             return None
         
         try:
-            # Configure Gemini
-            genai.configure(api_key=config.GOOGLE_API_KEY)
-            model = genai.GenerativeModel('gemini-2.5-pro')
-            
+            # Initialize Gemini client (google.genai replaces deprecated google.generativeai)
+            client = genai.Client(api_key=config.GOOGLE_API_KEY)
+
             # Format transcript for analysis
             transcript_text = AnalysisService._format_transcript(call.transcript)
-            
+
             # Build prompt
             prompt = AnalysisService.ANALYSIS_PROMPT.format(
                 transcript=transcript_text,
@@ -83,11 +82,14 @@ Respond ONLY with the JSON, no other text."""
                 duration=call.duration_seconds,
                 instructions=call.instructions or "No specific instructions",
             )
-            
+
             logger.info(f"Analyzing call {call_id} with Gemini...")
-            
+
             # Generate analysis
-            response = await model.generate_content_async(prompt)
+            response = await client.aio.models.generate_content(
+                model="gemini-2.5-pro",
+                contents=prompt,
+            )
             
             # Parse response
             analysis_data = AnalysisService._parse_response(response.text)
