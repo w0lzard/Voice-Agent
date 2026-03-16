@@ -907,16 +907,28 @@ async def _speak_scripted_line(
     text: str,
     realtime_audio: bool,
 ) -> None:
-    """Play a scripted line via TTS (session.say).
+    """Play a scripted line.
 
-    Using session.say() for ALL paths (realtime and pipeline) because:
-    - TTS is fast and reliable — no dependency on Gemini Live warm-up state.
-    - generate_reply() times out when Gemini's session is still initialising
-      (typically the first 13-15 s after start), causing the greeting to fail.
-    - The session has tts=_build_tts() configured, so say() synthesises via
-      OpenAI TTS and the Gemini realtime model handles conversation turns as
-      normal once it warms up.
+    Realtime (Gemini Live / OpenAI Realtime): uses generate_reply() with a
+    natural-language instruction so the realtime model speaks in its native
+    voice without going through a separate TTS provider.
+
+    Pipeline (STT → LLM → TTS): uses session.say() to bypass the LLM.
     """
+    if realtime_audio:
+        reply_kwargs: dict = {
+            "instructions": (
+                f"This is the opening of the call — NOT a reply to the user. "
+                f"Deliver this greeting naturally without any leading filler word: {text}"
+            ),
+            "allow_interruptions": True,
+            "input_modality": "text",
+        }
+        if _get_realtime_provider() != "google":
+            reply_kwargs["tool_choice"] = "none"
+        await session.generate_reply(**reply_kwargs)
+        return
+
     await session.say(text, allow_interruptions=True, add_to_chat_ctx=True)
 
 
@@ -1034,10 +1046,6 @@ async def entrypoint(ctx: agents.JobContext):
     if realtime_audio:
         session = AgentSession(
             llm=_build_realtime_llm(),
-            # tts is used by session.say() for scripted lines (greeting / reprompt /
-            # watchdog). It does NOT affect how Gemini Live generates conversational
-            # audio — that still comes through the realtime model's native pipeline.
-            tts=_build_tts(),
             tools=fnc_ctx.flatten(),
             turn_detection="realtime_llm",
             allow_interruptions=True,
@@ -1257,28 +1265,16 @@ async def entrypoint(ctx: agents.JobContext):
                         )
                         _last_agent_response_at[0] = now  # prevent re-trigger while recovering
                         try:
-                            # Interrupt any stale Gemini generation first, then play
-                            # a TTS prompt so the user knows the agent heard them.
-                            # This also gives Gemini's VAD a clean slate to respond
-                            # to the user's next utterance.
+                            # Interrupt any stale generation and give Gemini's VAD a
+                            # clean slate. Gemini's voice-activity path is more
+                            # reliable than programmatic generate_reply() when the
+                            # session state is uncertain — the next user utterance
+                            # will trigger a natural response.
                             if realtime_audio:
-                                try:
-                                    session.interrupt()
-                                    await asyncio.sleep(0.3)
-                                except Exception:
-                                    pass
-                            watchdog_text = (
-                                "Sorry, I didn't quite catch that. Could you please repeat?"
-                                if _get_default_language() == "en"
-                                else "Maafi chahta hoon, mujhe sahi se nahi suna. Kya aap dobara bol sakte hain?"
-                            )
-                            await _speak_scripted_line(
-                                session,
-                                text=watchdog_text,
-                                realtime_audio=realtime_audio,
-                            )
+                                session.interrupt()
+                                await asyncio.sleep(0.5)
                         except Exception as wd_err:
-                            logger.debug("Watchdog TTS fallback failed: %s", wd_err)
+                            logger.debug("Watchdog interrupt failed: %s", wd_err)
             except asyncio.CancelledError:
                 pass
 
@@ -1313,28 +1309,42 @@ async def entrypoint(ctx: agents.JobContext):
             if _call_failed.is_set():
                 return
 
-            # (b) Post-answer carrier-window delay.
+            # (b) Wait for the LATER of:
+            #   - Gemini warmed up (GEMINI_SESSION_WARMUP_SEC from entrypoint start)
+            #   - Carrier announcement window (CARRIER_ANNOUNCEMENT_WAIT_SEC after answer)
+            #
+            # This guarantees: generate_reply() won't time out (Gemini is ready) AND
+            # the carrier "call is being recorded" announcement has finished playing
+            # (so it can't interrupt the greeting mid-sentence and corrupt Gemini's state).
+            warmup_sec = _get_float_env("GEMINI_SESSION_WARMUP_SEC", 13.0)
             carrier_wait = _get_float_env("CARRIER_ANNOUNCEMENT_WAIT_SEC", 7.0)
-            if _call_answered_at[0] > 0.0:
-                post_elapsed = time.time() - _call_answered_at[0]
-                carrier_remaining = max(0.0, carrier_wait - post_elapsed)
-                logger.debug(
-                    "Post-answer carrier wait: %.1fs remaining (carrier_wait=%.0fs answered=%.1fs ago)",
-                    carrier_remaining, carrier_wait, post_elapsed,
-                )
-                if carrier_remaining > 0:
-                    try:
-                        await asyncio.wait_for(_call_failed.wait(), timeout=carrier_remaining)
-                        logger.info("Greeting aborted: SIP call failed during carrier wait.")
-                        return
-                    except asyncio.TimeoutError:
-                        pass
+
+            gemini_ready_at = _entrypoint_start_at + warmup_sec
+            carrier_done_at = (_call_answered_at[0] or time.time()) + carrier_wait
+            fire_at = max(gemini_ready_at, carrier_done_at)
+            wait_remaining = max(0.0, fire_at - time.time())
+
+            logger.debug(
+                "Greeting fire-at T+%.1fs: gemini_ready=T+%.1f carrier_done=T+%.1f wait=%.1fs",
+                fire_at - _entrypoint_start_at,
+                gemini_ready_at - _entrypoint_start_at,
+                carrier_done_at - _entrypoint_start_at,
+                wait_remaining,
+            )
+
+            if wait_remaining > 0:
+                try:
+                    await asyncio.wait_for(_call_failed.wait(), timeout=wait_remaining)
+                    logger.info("Greeting aborted: SIP call failed during delay.")
+                    return
+                except asyncio.TimeoutError:
+                    pass
 
             if _call_failed.is_set():
                 return
 
-            # Brief interrupt to clear any Gemini auto-generation from startup
-            # before TTS plays — avoids Gemini audio and TTS audio colliding.
+            # Single interrupt + brief settle before generate_reply so any Gemini
+            # auto-generation triggered at session.start() is fully cleared.
             if realtime_audio:
                 try:
                     session.interrupt()
