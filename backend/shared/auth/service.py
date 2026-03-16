@@ -431,6 +431,48 @@ class AuthService:
         return user, api_key_obj.workspace_id
     
     @staticmethod
+    async def phone_login(phone: str) -> Tuple[User, TokenResponse]:
+        """
+        Find or create a user by phone number and issue tokens.
+
+        Returns:
+            Tuple of (user, tokens)
+        """
+        db = get_database()
+
+        user_data = await db.users.find_one({"phone": phone})
+        if user_data:
+            user = User(**user_data)
+        else:
+            # Create a new user + workspace for this phone number
+            workspace = Workspace(
+                name=f"User's Workspace",
+                owner_id="",
+            )
+            placeholder_email = f"{phone.lstrip('+').replace(' ', '')}@phone.local"
+            user = User(
+                email=placeholder_email,
+                password_hash=secrets.token_hex(32),
+                name="User",
+                phone=phone,
+                workspace_id=workspace.workspace_id,
+                role="owner",
+                email_verified=True,
+            )
+            workspace.owner_id = user.user_id
+            await db.workspaces.insert_one(workspace.model_dump())
+            await db.users.insert_one(user.model_dump())
+            logger.info(f"Created new phone-based user for {phone}: {user.user_id}")
+
+        await db.users.update_one(
+            {"user_id": user.user_id},
+            {"$set": {"last_login": datetime.now(timezone.utc)}}
+        )
+
+        tokens = AuthService._create_tokens(user)
+        return user, tokens
+
+    @staticmethod
     def _create_tokens(user: User) -> TokenResponse:
         """Create access and refresh tokens for a user."""
         token_data = {

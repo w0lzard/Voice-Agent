@@ -40,15 +40,18 @@ export default function DashboardPage() {
 
   useEffect(() => {
     let isMounted = true;
+    let intervalId;
 
     async function loadDashboardData() {
       if (!getAuthHeaders().Authorization) return; // skip when not logged in
       try {
-        const [walletRes, statsRes, activeRes, queuedRes, logsRes] = await Promise.all([
+        const [activeRes, queuedRes] = await Promise.all([
+          fetchCalls({ status: 'in-progress' }),
+          fetchCalls({ status: 'queued' }),
+        ]);
+        const [walletRes, statsRes, logsRes] = await Promise.all([
           fetchWallet().catch(() => null),
           fetchStats().catch(() => null),
-          fetchCalls({ status: 'in-progress' }).catch(() => ({ data: [], total: 0 })),
-          fetchCalls({ status: 'queued' }).catch(() => ({ total: 0 })),
           fetchSystemLogs().catch(() => ({ data: [] }))
         ]);
 
@@ -62,13 +65,18 @@ export default function DashboardPage() {
           setLoading(false);
         }
       } catch (err) {
+        if (err.status === 401) {
+          // Token expired — stop polling; next page load will redirect to login
+          clearInterval(intervalId);
+          return;
+        }
         console.error("Error loading dashboard data:", err);
         if (isMounted) setLoading(false);
       }
     }
 
     loadDashboardData();
-    const intervalId = setInterval(loadDashboardData, 10000); // Poll every 10s for active calls
+    intervalId = setInterval(loadDashboardData, 10000); // Poll every 10s for active calls
     return () => {
       isMounted = false;
       clearInterval(intervalId);

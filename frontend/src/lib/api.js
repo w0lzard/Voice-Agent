@@ -55,9 +55,21 @@ export async function fetchClients(page = 1, perPage = 20) {
     return res.json();
 }
 
+export function clearExpiredToken() {
+    if (typeof window !== 'undefined') {
+        localStorage.removeItem('ea_token');
+    }
+}
+
 export async function fetchCalls(params = {}) {
     const query = new URLSearchParams(params).toString();
     const res = await fetch(`${API_BASE}/v1/calls?${query}`, { cache: 'no-store', headers: getAuthHeaders() });
+    if (res.status === 401) {
+        clearExpiredToken();
+        const err = new Error('Unauthorized');
+        err.status = 401;
+        throw err;
+    }
     if (!res.ok) throw new Error('Failed to fetch calls');
     return res.json();
 }

@@ -9,11 +9,12 @@ from shared.auth.models import (
     SignupRequest, LoginRequest, TokenResponse, RefreshRequest,
     UserResponse, CreateApiKeyRequest, ApiKeyResponse,
     ForgotPasswordRequest, ResetPasswordRequest, User,
-    VerifyEmailRequest, ResendCodeRequest,
+    VerifyEmailRequest, ResendCodeRequest, PhoneLoginRequest,
 )
 from shared.auth.service import AuthService
 from shared.auth.dependencies import get_current_user, require_auth
 from shared.settings import config
+from fastapi import Header
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -165,6 +166,35 @@ async def get_current_user_profile(user: User = Depends(require_auth)):
         role=user.role,
         created_at=user.created_at,
     )
+
+
+# ============== Phone Login (internal) ==============
+
+@router.post("/phone-login", response_model=dict)
+async def phone_login(
+    request: PhoneLoginRequest,
+    x_internal_secret: str = Header(default="", alias="X-Internal-Secret"),
+):
+    """
+    Internal endpoint: issue tokens for a phone-verified user.
+    Called only by the Next.js /api/phone-otp/verify server route.
+    Requires X-Internal-Secret header.
+    """
+    if not config.INTERNAL_API_SECRET or x_internal_secret != config.INTERNAL_API_SECRET:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+
+    user, tokens = await AuthService.phone_login(request.phone)
+    return {
+        "user": UserResponse(
+            user_id=user.user_id,
+            email=user.email,
+            name=user.name,
+            workspace_id=user.workspace_id,
+            role=user.role,
+            created_at=user.created_at,
+        ).model_dump(),
+        "tokens": tokens.model_dump(),
+    }
 
 
 # ============== API Keys ==============

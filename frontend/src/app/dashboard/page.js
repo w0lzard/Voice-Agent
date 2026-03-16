@@ -11,13 +11,14 @@ export default function LiveMonitorPage() {
 
   useEffect(() => {
     let isMounted = true;
+    let interval;
 
     async function fetchData() {
       if (!getAuthHeaders().Authorization) return; // skip when not logged in
       try {
-        const [statsRes, activeRes, walletRes] = await Promise.all([
+        const activeRes = await fetchCalls({ status: 'in-progress' });
+        const [statsRes, walletRes] = await Promise.all([
           fetchStats().catch(() => null),
-          fetchCalls({ status: 'in-progress' }).catch(() => ({ data: [] })),
           fetchWallet().catch(() => null)
         ]);
 
@@ -28,13 +29,18 @@ export default function LiveMonitorPage() {
           setLoading(false);
         }
       } catch (err) {
+        if (err.status === 401) {
+          // Token expired — stop polling
+          clearInterval(interval);
+          return;
+        }
         console.error("Failed to fetch live monitor data:", err);
         if (isMounted) setLoading(false);
       }
     }
 
     fetchData();
-    const interval = setInterval(fetchData, 8000); // refresh every 8 seconds
+    interval = setInterval(fetchData, 8000); // refresh every 8 seconds
     return () => {
       isMounted = false;
       clearInterval(interval);

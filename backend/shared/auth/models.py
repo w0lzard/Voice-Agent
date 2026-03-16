@@ -21,6 +21,7 @@ class User(BaseModel):
     workspace_id: str
     role: str = "owner"  # owner, admin, member
     email_verified: bool = False
+    phone: Optional[str] = None
     otp_code: Optional[str] = None
     otp_expires_at: Optional[datetime] = None
     failed_login_attempts: int = 0
@@ -139,3 +140,8 @@ class ResetPasswordRequest(BaseModel):
     """Reset password request."""
     token: str
     new_password: str = Field(min_length=8)
+
+
+class PhoneLoginRequest(BaseModel):
+    """Phone login request (internal — called by Next.js verify route)."""
+    phone: str

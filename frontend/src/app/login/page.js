@@ -7,23 +7,26 @@ import { API_BASE } from '../../lib/api';
 
 export default function LoginPage() {
     const { login } = useAuth();
+    const [tab, setTab] = useState('email'); // 'email' | 'phone'
+
+    // Email tab state
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
+
+    // Phone tab state
+    const [phone, setPhone] = useState('');
+    const [name, setName] = useState('');
+
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
-    const handleSubmit = async (e) => {
+    const handleEmailSubmit = async (e) => {
         e.preventDefault();
         setError('');
         setLoading(true);
 
-        // debug information
-        console.debug('Login page - API_BASE =', API_BASE);
-        console.debug('login payload', { email, password });
-
         try {
             const url = `${API_BASE}/v1/auth/login`;
-            console.debug('fetching', url);
             const res = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -51,8 +54,32 @@ export default function LoginPage() {
         }
     };
 
+    const handlePhoneSubmit = async (e) => {
+        e.preventDefault();
+        setError('');
+        setLoading(true);
+
+        try {
+            const res = await fetch('/api/phone-otp/send', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ phone, name })
+            });
+            const data = await res.json();
+            if (!data.ok) {
+                setError(data.error || 'Failed to send OTP');
+                return;
+            }
+            window.location.href = `/verify-phone?phone=${encodeURIComponent(phone)}`;
+        } catch {
+            setError('Network error. Please try again.');
+        } finally {
+            setLoading(false);
+        }
+    };
+
     const handleGoogle = () => {
-        const clientId = 'GOOGLE_CLIENT_ID'; // Placeholder — configured via env
+        const clientId = 'GOOGLE_CLIENT_ID';
         if (!clientId || clientId === 'GOOGLE_CLIENT_ID') {
             setError('Google OAuth not configured. Add GOOGLE_CLIENT_ID to .env');
             return;
@@ -72,36 +99,94 @@ export default function LoginPage() {
                 <h1 className="auth-title">Welcome Back</h1>
                 <p className="auth-subtitle">Sign in to your Estate Agent dashboard</p>
 
+                <div style={{ display: 'flex', gap: 8, marginBottom: 20, background: 'var(--bg-secondary, #1a1a2e)', borderRadius: 8, padding: 4 }}>
+                    <button
+                        type="button"
+                        onClick={() => { setTab('email'); setError(''); }}
+                        style={{
+                            flex: 1, padding: '7px 0', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                            background: tab === 'email' ? 'var(--accent, #6366f1)' : 'transparent',
+                            color: tab === 'email' ? '#fff' : 'var(--text-muted, #888)',
+                            transition: 'all 0.15s',
+                        }}
+                    >
+                        Email
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => { setTab('phone'); setError(''); }}
+                        style={{
+                            flex: 1, padding: '7px 0', borderRadius: 6, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                            background: tab === 'phone' ? 'var(--accent, #6366f1)' : 'transparent',
+                            color: tab === 'phone' ? '#fff' : 'var(--text-muted, #888)',
+                            transition: 'all 0.15s',
+                        }}
+                    >
+                        Phone
+                    </button>
+                </div>
+
                 {error && <div className="auth-error">{error}</div>}
 
-                <form className="auth-form" onSubmit={handleSubmit}>
-                    <div className="form-group">
-                        <label>Email</label>
-                        <input
-                            type="email"
-                            placeholder="you@company.com"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            required
-                        />
-                    </div>
+                {tab === 'email' ? (
+                    <form className="auth-form" onSubmit={handleEmailSubmit}>
+                        <div className="form-group">
+                            <label>Email</label>
+                            <input
+                                type="email"
+                                placeholder="you@company.com"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                required
+                            />
+                        </div>
 
-                    <div className="form-group">
-                        <label>Password</label>
-                        <input
-                            type="password"
-                            placeholder="••••••••"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            required
-                            minLength={8}
-                        />
-                    </div>
+                        <div className="form-group">
+                            <label>Password</label>
+                            <input
+                                type="password"
+                                placeholder="••••••••"
+                                value={password}
+                                onChange={(e) => setPassword(e.target.value)}
+                                required
+                                minLength={8}
+                            />
+                        </div>
 
-                    <button type="submit" className="btn btn-primary" disabled={loading}>
-                        {loading ? 'Signing in...' : 'Sign In'}
-                    </button>
-                </form>
+                        <button type="submit" className="btn btn-primary" disabled={loading}>
+                            {loading ? 'Signing in...' : 'Sign In'}
+                        </button>
+                    </form>
+                ) : (
+                    <form className="auth-form" onSubmit={handlePhoneSubmit}>
+                        <div className="form-group">
+                            <label>Phone Number</label>
+                            <input
+                                type="tel"
+                                placeholder="+91 98765 43210"
+                                value={phone}
+                                onChange={(e) => setPhone(e.target.value)}
+                                required
+                            />
+                        </div>
+
+                        <div className="form-group">
+                            <label>Your Name</label>
+                            <input
+                                type="text"
+                                placeholder="John Doe"
+                                value={name}
+                                onChange={(e) => setName(e.target.value)}
+                                required
+                                minLength={2}
+                            />
+                        </div>
+
+                        <button type="submit" className="btn btn-primary" disabled={loading}>
+                            {loading ? 'Sending OTP...' : 'Send OTP'}
+                        </button>
+                    </form>
+                )}
 
                 <div className="auth-divider">or</div>
 

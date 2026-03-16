@@ -112,6 +112,9 @@ class Config:
     
     # Internal Service Auth
     INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "vobiz_internal_secret_key_123")
+    # Secret shared between Next.js phone-OTP verify route and the backend phone-login endpoint.
+    # Set to a long random string in production. Leave empty to disable the endpoint.
+    INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
     
     @classmethod
     def validate(cls):
