@@ -60,7 +60,7 @@ export default function LoginPage() {
         setLoading(true);
 
         try {
-            const res = await fetch('/api/phone-otp/send', {
+            const res = await fetch(`${API_BASE}/v1/auth/phone-otp/send`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ phone, name })

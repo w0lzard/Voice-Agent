@@ -473,6 +473,70 @@ class AuthService:
         return user, tokens
 
     @staticmethod
+    async def send_phone_otp(phone: str, name: str) -> bool:
+        """Send OTP via SMS and store in MongoDB."""
+        import httpx
+        import re
+
+        normalized = re.sub(r'[\s\-]', '', phone)
+
+        async with httpx.AsyncClient(timeout=15) as client:
+            resp = await client.get(
+                "https://vbspuresult.org.in/Account/SendOtp",
+                params={"mobile": normalized, "Name": name},
+            )
+            resp.raise_for_status()
+
+        otp = resp.text.strip().strip('"').strip("'")
+        if not re.fullmatch(r'\d{6}', otp):
+            raise ValueError(f"Unexpected OTP response: {resp.text!r}")
+
+        db = get_database()
+        expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
+
+        await db.phone_otps.update_one(
+            {"phone": normalized},
+            {"$set": {"phone": normalized, "otp": otp, "expires_at": expires_at}},
+            upsert=True,
+        )
+
+        # Create TTL index (no-op if already exists)
+        try:
+            await db.phone_otps.create_index("expires_at", expireAfterSeconds=0)
+        except Exception:
+            pass
+
+        return True
+
+    @staticmethod
+    async def verify_phone_otp(phone: str, otp: str) -> Tuple[User, TokenResponse]:
+        """Verify OTP from MongoDB and issue tokens."""
+        import re
+
+        normalized = re.sub(r'[\s\-]', '', phone)
+
+        db = get_database()
+        record = await db.phone_otps.find_one({"phone": normalized})
+
+        if not record:
+            raise ValueError("OTP not found or already used. Please request a new one.")
+
+        expires_at = record.get("expires_at")
+        if expires_at:
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) > expires_at:
+                await db.phone_otps.delete_one({"phone": normalized})
+                raise ValueError("OTP has expired. Please request a new one.")
+
+        if record.get("otp") != otp:
+            raise ValueError("Invalid OTP. Please try again.")
+
+        await db.phone_otps.delete_one({"phone": normalized})
+
+        return await AuthService.phone_login(normalized)
+
+    @staticmethod
     def _create_tokens(user: User) -> TokenResponse:
         """Create access and refresh tokens for a user."""
         token_data = {

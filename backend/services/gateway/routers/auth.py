@@ -10,6 +10,7 @@ from shared.auth.models import (
     UserResponse, CreateApiKeyRequest, ApiKeyResponse,
     ForgotPasswordRequest, ResetPasswordRequest, User,
     VerifyEmailRequest, ResendCodeRequest, PhoneLoginRequest,
+    PhoneOtpSendRequest, PhoneOtpVerifyRequest,
 )
 from shared.auth.service import AuthService
 from shared.auth.dependencies import get_current_user, require_auth
@@ -166,6 +167,40 @@ async def get_current_user_profile(user: User = Depends(require_auth)):
         role=user.role,
         created_at=user.created_at,
     )
+
+
+# ============== Phone OTP (browser-facing) ==============
+
+@router.post("/phone-otp/send", response_model=dict)
+async def phone_otp_send(request: PhoneOtpSendRequest):
+    """Send OTP via SMS and store in MongoDB."""
+    try:
+        await AuthService.send_phone_otp(request.phone, request.name)
+        return {"ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+
+
+@router.post("/phone-otp/verify", response_model=dict)
+async def phone_otp_verify(request: PhoneOtpVerifyRequest):
+    """Verify phone OTP and return tokens."""
+    try:
+        user, tokens = await AuthService.verify_phone_otp(request.phone, request.otp)
+        return {
+            "ok": True,
+            "token": tokens.access_token,
+            "user": UserResponse(
+                user_id=user.user_id,
+                email=user.email,
+                name=user.name,
+                workspace_id=user.workspace_id,
+                role=user.role,
+                created_at=user.created_at,
+            ).model_dump(),
+            "tokens": tokens.model_dump(),
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
 
 
 # ============== Phone Login (internal) ==============

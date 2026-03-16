@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
+import { API_BASE } from '@/lib/api';
 
 function VerifyPhoneForm() {
     const searchParams = useSearchParams();
@@ -51,7 +52,7 @@ function VerifyPhoneForm() {
         setError('');
         setLoading(true);
         try {
-            const res = await fetch('/api/phone-otp/verify', {
+            const res = await fetch(`${API_BASE}/v1/auth/phone-otp/verify`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ phone, otp: codeStr || code.join('') }),

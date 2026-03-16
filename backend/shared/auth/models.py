@@ -145,3 +145,15 @@ class ResetPasswordRequest(BaseModel):
 class PhoneLoginRequest(BaseModel):
     """Phone login request (internal — called by Next.js verify route)."""
     phone: str
+
+
+class PhoneOtpSendRequest(BaseModel):
+    """Send phone OTP request."""
+    phone: str
+    name: str
+
+
+class PhoneOtpVerifyRequest(BaseModel):
+    """Verify phone OTP request."""
+    phone: str
+    otp: str
