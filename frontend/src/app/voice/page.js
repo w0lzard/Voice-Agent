@@ -274,63 +274,23 @@ export default function VoicePage() {
             ))}
           </div>
 
-          {/* Right — recording panel */}
-          <div className="lg:col-span-1 flex flex-col gap-3">
-            {/* Timer + waveform card */}
-            <div className="rounded-xl border border-white/8 p-4 flex flex-col items-center gap-3"
-              style={{background: 'rgba(0,0,0,0.25)'}}>
-              {/* Timer ring */}
-              <div className="relative flex items-center justify-center">
-                <svg width="72" height="72" className="-rotate-90">
-                  <circle cx="36" cy="36" r="30" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="4"/>
-                  <circle cx="36" cy="36" r="30" fill="none" stroke={isRecording ? '#ef4444' : '#2b6cee'}
-                    strokeWidth="4" strokeLinecap="round"
-                    strokeDasharray={`${2 * Math.PI * 30}`}
-                    strokeDashoffset={isRecording ? 0 : `${2 * Math.PI * 30}`}
-                    style={{transition: 'stroke-dashoffset 0.3s ease'}}/>
-                </svg>
-                <div className="absolute flex flex-col items-center">
-                  <span className={`text-[11px] font-mono font-bold ${isRecording ? 'text-red-400' : 'text-slate-400'}`}>
-                    {isRecording ? '00:00' : '00:60'}
-                  </span>
-                  <span className="text-[9px] text-slate-600 font-bold uppercase tracking-wider">
-                    {isRecording ? 'REC' : 'MAX'}
-                  </span>
-                </div>
-              </div>
-              {/* mini waveform */}
-              <div className={`flex items-end justify-center gap-0.5 h-8 w-full ${isRecording ? 'wave-playing' : ''}`}>
-                {[...Array(32)].map((_, i) => {
-                  const h = [20,50,80,100,70,40,90,60,30,85,100,55,35,75,100,65,45,90,50,30,80,100,60,40,70,95,45,25,60,80,35,55][i % 32];
-                  return (
-                    <div key={i} className="wave-bar w-0.5 rounded-full"
-                      style={{
-                        height: isRecording ? `${h}%` : '2px',
-                        background: isRecording ? `rgba(239,68,68,${h/100})` : 'rgba(255,255,255,0.10)',
-                        animationDelay: `${(i * 0.035).toFixed(2)}s`,
-                      }}
-                    />
-                  );
-                })}
-              </div>
+          {/* Right — waveform + button */}
+          <div className="lg:col-span-1 flex flex-col items-center gap-4">
+            {/* mini waveform */}
+            <div className={`flex items-end justify-center gap-1 h-14 w-full ${isRecording ? 'wave-playing' : ''}`}>
+              {[...Array(28)].map((_, i) => {
+                const h = [20,50,80,100,70,40,90,60,30,85,100,55,35,75,100,65,45,90,50,30,80,100,60,40,70,95,45,25][i % 28];
+                return (
+                  <div key={i} className="wave-bar w-1 rounded-full"
+                    style={{
+                      height: isRecording ? `${h}%` : '3px',
+                      background: isRecording ? `rgba(43,108,238,${h/100})` : 'rgba(255,255,255,0.12)',
+                      animationDelay: `${(i * 0.04).toFixed(2)}s`,
+                    }}
+                  />
+                );
+              })}
             </div>
-
-            {/* Tips */}
-            <div className="rounded-xl border border-white/5 p-3 space-y-2" style={{background: 'rgba(255,255,255,0.02)'}}>
-              <p className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Recording Tips</p>
-              {[
-                { icon: 'volume_off', text: 'Find a quiet room' },
-                { icon: 'mic_external_on', text: 'Stay 10–15 cm from mic' },
-                { icon: 'chat', text: 'Speak at a natural pace' },
-              ].map(tip => (
-                <div key={tip.icon} className="flex items-center gap-2">
-                  <span className="material-symbols-outlined text-primary/50 text-[14px]">{tip.icon}</span>
-                  <span className="text-[11px] text-slate-500">{tip.text}</span>
-                </div>
-              ))}
-            </div>
-
-            {/* Button */}
             <button
               onClick={() => setIsRecording(!isRecording)}
               className={`w-full flex items-center justify-center gap-2.5 py-3 rounded-xl font-semibold text-sm text-white transition-all relative overflow-hidden ${
@@ -342,6 +302,7 @@ export default function VoicePage() {
               <span className="material-symbols-outlined text-[20px] relative z-10">{isRecording ? 'stop_circle' : 'mic'}</span>
               <span className="relative z-10">{isRecording ? 'Stop Recording' : 'Start Recording'}</span>
             </button>
+            <p className="text-[10px] text-slate-600 text-center">Speak naturally — no script needed</p>
           </div>
         </div>
       </div>
