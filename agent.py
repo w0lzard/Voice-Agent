@@ -1015,6 +1015,8 @@ async def entrypoint(ctx: agents.JobContext):
     # Initialize function context
     fnc_ctx = TransferFunctions(ctx, phone_number)
     last_user_speech_at = time.time()
+    # Use a list so sync event handlers can mutate it without nonlocal
+    _last_agent_response_at: list[float] = [time.time()]
     reprompt_task: asyncio.Task | None = None
     realtime_audio = _use_realtime_audio()
     if not _validate_runtime_provider_keys(realtime_audio):
@@ -1145,6 +1147,8 @@ async def entrypoint(ctx: agents.JobContext):
         text = " ".join(parts).strip()
         if text:
             logger.info("conversation_item_added role=%s text=\"%s\"", role, _safe_log_text(text))
+            if role == "assistant":
+                _last_agent_response_at[0] = time.time()
 
     async def _reprompt_if_no_speech() -> None:
         """If caller stays silent/no transcript arrives, send a short reprompt.
@@ -1204,6 +1208,54 @@ async def entrypoint(ctx: agents.JobContext):
         # Set when the SIP call fails so the greeting task aborts before generate_reply.
         _call_failed = asyncio.Event()
 
+        async def _watchdog_agent_response() -> None:
+            """
+            Safety net: if the user spoke but Gemini hasn't responded within
+            AGENT_RESPONSE_WATCHDOG_SEC (default 6s), force a generate_reply.
+
+            This recovers from the case where the user interrupts the agent's
+            greeting and Gemini's turn-detection silently fails to trigger the
+            next generation (a known Gemini Live edge case).
+            """
+            watchdog_sec = _get_float_env("AGENT_RESPONSE_WATCHDOG_SEC", 6.0)
+            try:
+                while True:
+                    await asyncio.sleep(1.0)
+                    if _call_failed.is_set():
+                        break
+                    now = time.time()
+                    last_agent = _last_agent_response_at[0]
+                    user_spoke_ago = now - last_user_speech_at
+                    # Trigger only when: user spoke recently, agent hasn't responded,
+                    # and enough time has passed to rule out normal generation latency.
+                    if (
+                        last_user_speech_at > last_agent
+                        and user_spoke_ago >= watchdog_sec
+                        and user_spoke_ago < 30.0  # don't trigger if user left
+                    ):
+                        logger.warning(
+                            "Watchdog: user spoke %.1fs ago, agent silent. "
+                            "Forcing generate_reply to recover.",
+                            user_spoke_ago,
+                        )
+                        _last_agent_response_at[0] = now  # prevent re-trigger while recovering
+                        try:
+                            if realtime_audio:
+                                try:
+                                    session.interrupt()
+                                    await asyncio.sleep(0.3)
+                                except Exception:
+                                    pass
+                            await _speak_scripted_line(
+                                session,
+                                text="[Respond naturally to what the user just said.]",
+                                realtime_audio=realtime_audio,
+                            )
+                        except Exception as wd_err:
+                            logger.debug("Watchdog generate_reply failed: %s", wd_err)
+            except asyncio.CancelledError:
+                pass
+
         async def _send_greeting_and_start_reprompt() -> None:
             nonlocal last_user_speech_at, reprompt_task
             # Gemini Live needs ~13-15s from job start before generate_reply is stable.
@@ -1226,34 +1278,23 @@ async def entrypoint(ctx: agents.JobContext):
                 delay, warmup_sec, elapsed,
             )
 
-            # During warmup: interrupt Gemini every 2s to cancel any auto-generated turns.
-            # Gemini sees the system prompt at session.start() and immediately tries to
-            # speak. Each auto-triggered _realtime_reply_task that times out corrupts the
-            # generation tracker permanently. Periodic interrupts keep state clean until
-            # we are ready to send the greeting ourselves.
-            warmup_remaining = delay
-            while warmup_remaining > 0:
-                if _call_failed.is_set():
-                    logger.info("Greeting aborted: SIP call failed during warmup.")
-                    return
-                if realtime_audio:
-                    try:
-                        session.interrupt()
-                    except Exception:
-                        pass
-                sleep_for = min(2.0, warmup_remaining)
-                try:
-                    await asyncio.wait_for(_call_failed.wait(), timeout=sleep_for)
-                    logger.info("Greeting aborted: SIP call failed during warmup.")
-                    return
-                except asyncio.TimeoutError:
-                    warmup_remaining -= sleep_for
+            # Wait for Gemini to finish warming up. A single interrupt was already
+            # issued right after session.start() to cancel the first auto-generation.
+            # We do NOT interrupt repeatedly here — over-interrupting corrupts Gemini's
+            # turn-detection state machine, causing it to stop responding after the
+            # first user-triggered interruption of the greeting.
+            try:
+                await asyncio.wait_for(_call_failed.wait(), timeout=delay)
+                logger.info("Greeting aborted: SIP call failed during warmup.")
+                return
+            except asyncio.TimeoutError:
+                pass  # Normal path: warmup elapsed, call still in progress
 
             if _call_failed.is_set():
                 return
 
-            # Final interrupt + brief settle before our greeting generate_reply.
-            # Ensures no stale Gemini response is in-flight when we send the greeting.
+            # Single interrupt + brief settle before sending the greeting.
+            # Clears any residual Gemini state from the warmup period.
             if realtime_audio:
                 try:
                     session.interrupt()
@@ -1296,6 +1337,7 @@ async def entrypoint(ctx: agents.JobContext):
             # Reset silence timer so reprompt is measured from greeting end, not entrypoint start.
             last_user_speech_at = time.time()
             reprompt_task = asyncio.create_task(_reprompt_if_no_speech())
+            asyncio.ensure_future(_watchdog_agent_response())
 
         def _on_sip_participant_connected(participant) -> None:
             nonlocal _greeting_triggered, _greeting_task
