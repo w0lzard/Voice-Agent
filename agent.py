@@ -221,21 +221,7 @@ async def _ensure_outbound_trunk(ctx: agents.JobContext) -> str | None:
             matches_address = getattr(trunk, "address", "") == sip_domain
             matches_number = bool(getattr(trunk, "numbers", None) and caller_id in trunk.numbers)
             if matches_name or (matches_address and matches_number):
-                try:
-                    updated = await ctx.api.sip.update_outbound_trunk_fields(
-                        trunk.sip_trunk_id,
-                        name=trunk_name,
-                        address=sip_domain,
-                        numbers=[caller_id],
-                        auth_username=auth_id,
-                        auth_password=auth_token,
-                    )
-                    logger.info(f"Synced existing outbound trunk from env: {trunk.sip_trunk_id}")
-                    return updated.sip_trunk_id
-                except Exception as e:
-                    logger.warning(f"Could not sync existing outbound trunk {trunk.sip_trunk_id}: {e}")
-                    logger.info(f"Using existing outbound trunk without sync: {trunk.sip_trunk_id}")
-                    return trunk.sip_trunk_id
+                return await _sync_trunk_credentials(ctx, trunk.sip_trunk_id)
     except Exception as e:
         logger.warning(f"Could not list outbound trunks before create: {e}")
 
@@ -258,16 +244,77 @@ async def _ensure_outbound_trunk(ctx: agents.JobContext) -> str | None:
         return None
 
 
+async def _sync_trunk_credentials(ctx: agents.JobContext, trunk_id: str) -> str:
+    """
+    Ensure the credentials stored in LiveKit for *trunk_id* match the current env vars.
+
+    Strategy:
+    1. Try update_outbound_trunk_fields (works when LiveKit supports it).
+    2. If that fails, delete the stale trunk and recreate it so the fresh
+       credentials are written into LiveKit — this fixes SIP 412 auth errors
+       caused by outdated stored credentials.
+
+    Returns the trunk ID to use (may differ from input if trunk was recreated).
+    """
+    sip_domain, auth_id, auth_token, caller_id = _get_vobiz_trunk_config()
+    if not all([sip_domain, auth_id, auth_token, caller_id]):
+        return trunk_id  # No credentials to sync — use as-is
+
+    trunk_name = (os.getenv("VOBIZ_TRUNK_NAME") or "vobiz-outbound-auto").strip()
+
+    # Attempt in-place update first (zero-downtime path).
+    try:
+        updated = await ctx.api.sip.update_outbound_trunk_fields(
+            trunk_id,
+            name=trunk_name,
+            address=sip_domain,
+            numbers=[caller_id],
+            auth_username=auth_id,
+            auth_password=auth_token,
+        )
+        logger.info("Synced credentials for trunk %s", trunk_id)
+        return getattr(updated, "sip_trunk_id", trunk_id)
+    except Exception as e:
+        logger.warning("Could not update trunk %s (%s) — will delete and recreate.", trunk_id, e)
+
+    # Delete stale trunk, then recreate with current credentials.
+    try:
+        await ctx.api.sip.delete_sip_trunk(api.DeleteSIPTrunkRequest(sip_trunk_id=trunk_id))
+        logger.info("Deleted stale trunk %s", trunk_id)
+    except Exception as del_e:
+        logger.warning("Could not delete stale trunk %s: %s", trunk_id, del_e)
+
+    try:
+        created = await ctx.api.sip.create_sip_outbound_trunk(
+            api.CreateSIPOutboundTrunkRequest(
+                trunk=api.SIPOutboundTrunkInfo(
+                    name=trunk_name,
+                    address=sip_domain,
+                    numbers=[caller_id],
+                    auth_username=auth_id,
+                    auth_password=auth_token,
+                )
+            )
+        )
+        logger.info("Recreated trunk with fresh credentials: %s", created.sip_trunk_id)
+        return created.sip_trunk_id
+    except Exception as create_e:
+        logger.error("Failed to recreate trunk: %s. Using original %s (may still fail).", create_e, trunk_id)
+        return trunk_id
+
+
 async def _resolve_outbound_trunk_id(ctx: agents.JobContext, configured: str | None) -> str | None:
     """
     Resolve an outbound trunk ID. Supports:
-    1) Direct trunk id (ST_xxx)
+    1) Direct trunk id (ST_xxx) — credentials always synced from env
     2) Trunk name
     3) Auto-match by caller number
     4) Fallback to first available outbound trunk
     """
     if _is_trunk_id(configured):
-        return configured
+        # Always sync credentials even for direct trunk IDs so stale LiveKit
+        # credentials don't silently cause SIP 412 authentication failures.
+        return await _sync_trunk_credentials(ctx, configured)
 
     requested = (configured or "").strip()
     caller_number = os.getenv("VOBIZ_CALLER_ID") or os.getenv("VOBIZ_OUTBOUND_NUMBER")
