@@ -993,9 +993,9 @@ async def entrypoint(ctx: agents.JobContext):
         async def _send_greeting_and_start_reprompt() -> None:
             nonlocal last_user_speech_at, reprompt_task
             # Gemini WebSocket may still be establishing when participant_connected fires.
-            # Give the session a short head-start before the first attempt so we don't
-            # burn an attempt on a guaranteed timeout.
-            await asyncio.sleep(_get_float_env("GREETING_INITIAL_DELAY_SEC", 0.8))
+            # A longer initial delay (2.0s default) prevents the first generate_reply from
+            # timing out and leaving orphaned Gemini responses that corrupt session state.
+            await asyncio.sleep(_get_float_env("GREETING_INITIAL_DELAY_SEC", 2.0))
             _max_attempts = 6
             for _attempt in range(_max_attempts):
                 try:
@@ -1011,6 +1011,15 @@ async def entrypoint(ctx: agents.JobContext):
                             "Greeting timed out (model not ready yet), "
                             f"retrying in {_wait:.1f}s... (attempt {_attempt + 1}/{_max_attempts})"
                         )
+                        # Interrupt any in-flight Gemini generation before retrying.
+                        # Without this, the orphaned response corrupts session state so the
+                        # agent never responds to user speech after the greeting.
+                        if realtime_audio:
+                            try:
+                                session.interrupt()
+                                await asyncio.sleep(0.2)  # brief settle after interrupt
+                            except Exception as int_e:
+                                logger.debug("session.interrupt() during greeting retry: %s", int_e)
                         await asyncio.sleep(_wait)
                     else:
                         logger.warning(f"Greeting failed: {greet_error}")
