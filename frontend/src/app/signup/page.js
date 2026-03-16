@@ -38,8 +38,10 @@ export default function SignupPage() {
                 return;
             }
 
-            // Redirect to email verification
-            router.push(`/verify?email=${encodeURIComponent(email)}`);
+            // Redirect to email verification (include devOtp if backend provided it)
+            const verifyUrl = `/verify?email=${encodeURIComponent(email)}` +
+                (data.devOtp ? `&devOtp=${encodeURIComponent(data.devOtp)}` : '');
+            router.push(verifyUrl);
         } catch {
             setError('Network error. Please make sure the backend is running.');
         } finally {

@@ -13,6 +13,7 @@ from shared.auth.models import (
 )
 from shared.auth.service import AuthService
 from shared.auth.dependencies import get_current_user, require_auth
+from shared.settings import config
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -24,7 +25,7 @@ async def signup(request: SignupRequest):
     Tokens are only issued after the email is verified via /auth/verify.
     """
     try:
-        user, workspace, email_sent, email_error = await AuthService.signup(request)
+        user, workspace, email_sent, email_error, otp = await AuthService.signup(request)
         response = {
             "ok": True,
             "needsVerification": True,
@@ -40,6 +41,8 @@ async def signup(request: SignupRequest):
             )
             if email_error:
                 response["emailError"] = email_error
+            if config.DEBUG:
+                response["devOtp"] = otp
         return response
     except ValueError as e:
         raise HTTPException(
@@ -107,8 +110,8 @@ async def verify_email(request: VerifyEmailRequest):
 @router.post("/resend-code", response_model=dict)
 async def resend_code(request: ResendCodeRequest):
     """Resend OTP verification code."""
-    email_sent = await AuthService.resend_otp(request.email)
-    return {
+    email_sent, otp = await AuthService.resend_otp(request.email)
+    response = {
         "ok": True,
         "emailSent": email_sent,
         "message": (
@@ -117,6 +120,9 @@ async def resend_code(request: ResendCodeRequest):
             else "Could not send verification email. Please contact support."
         ),
     }
+    if not email_sent and config.DEBUG:
+        response["devOtp"] = otp
+    return response
 
 
 @router.post("/refresh", response_model=TokenResponse)

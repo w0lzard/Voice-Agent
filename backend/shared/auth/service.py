@@ -103,7 +103,7 @@ class AuthService:
             # the email service is configured correctly.
             logger.warning(f"OTP for {user.email}: {otp}")
 
-        return user, workspace, email_sent, email_error
+        return user, workspace, email_sent, email_error, otp
 
     @staticmethod
     async def verify_otp(email: str, code: str) -> Tuple[User, TokenResponse]:
@@ -176,7 +176,7 @@ class AuthService:
             logger.error(f"Failed to resend OTP to {user.email}: {e}")
             logger.warning(f"OTP for {user.email}: {otp}")
 
-        return email_sent
+        return email_sent, otp
     
     @staticmethod
     async def login(request: LoginRequest) -> Tuple[User, TokenResponse]:

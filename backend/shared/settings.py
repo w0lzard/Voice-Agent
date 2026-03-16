@@ -103,6 +103,9 @@ class Config:
     GMAIL_USER = os.getenv("GMAIL_USER", "")        # e.g. you@gmail.com
     GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
 
+    # Debug — set DEBUG=true to include OTP in API response when email fails
+    DEBUG = os.getenv("DEBUG", "false").strip().lower() == "true"
+
     # Server
     API_HOST = os.getenv("API_HOST", "0.0.0.0")
     API_PORT = int(os.getenv("PORT") or os.getenv("API_PORT", "8000"))

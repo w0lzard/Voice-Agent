@@ -9,7 +9,8 @@ function VerifyForm() {
     const searchParams = useSearchParams();
     const { login } = useAuth();
     const email = searchParams.get('email') || '';
-    const [code, setCode] = useState(['', '', '', '', '', '']);
+    const devOtp = searchParams.get('devOtp') || '';
+    const [code, setCode] = useState(devOtp ? devOtp.split('') : ['', '', '', '', '', '']);
     const [error, setError] = useState('');
     const [success, setSuccess] = useState('');
     const [loading, setLoading] = useState(false);
@@ -17,7 +18,13 @@ function VerifyForm() {
     const inputRefs = useRef([]);
 
     useEffect(() => {
-        if (inputRefs.current[0]) inputRefs.current[0].focus();
+        if (devOtp) {
+            // Auto-submit when OTP is pre-filled
+            handleVerify(devOtp);
+        } else if (inputRefs.current[0]) {
+            inputRefs.current[0].focus();
+        }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const handleChange = (index, value) => {
@@ -97,7 +104,14 @@ function VerifyForm() {
 
             const data = await res.json();
             if (data.ok) {
-                setSuccess('New verification code sent!');
+                if (data.devOtp) {
+                    const digits = data.devOtp.split('');
+                    setCode(digits);
+                    setSuccess('Email failed — using debug code (auto-filling)');
+                    handleVerify(data.devOtp);
+                } else {
+                    setSuccess('New verification code sent!');
+                }
             } else {
                 setError(data.error || 'Failed to resend');
             }
@@ -119,10 +133,17 @@ function VerifyForm() {
                 </div>
 
                 <h1 className="auth-title">Verify Email</h1>
-                <p className="auth-subtitle">
-                    We sent a 6-digit code to<br />
-                    <strong style={{ color: 'var(--text-primary)' }}>{email}</strong>
-                </p>
+                {devOtp ? (
+                    <p className="auth-subtitle" style={{ color: '#f59e0b' }}>
+                        Email delivery failed — auto-verifying with debug code.<br />
+                        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Fix email config to disable this.</span>
+                    </p>
+                ) : (
+                    <p className="auth-subtitle">
+                        We sent a 6-digit code to<br />
+                        <strong style={{ color: 'var(--text-primary)' }}>{email}</strong>
+                    </p>
+                )}
 
                 {error && <div className="auth-error">{error}</div>}
                 {success && <div className="auth-success">{success}</div>}
