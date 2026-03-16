@@ -1265,16 +1265,22 @@ async def entrypoint(ctx: agents.JobContext):
                         )
                         _last_agent_response_at[0] = now  # prevent re-trigger while recovering
                         try:
-                            # Interrupt any stale generation and give Gemini's VAD a
-                            # clean slate. Gemini's voice-activity path is more
-                            # reliable than programmatic generate_reply() when the
-                            # session state is uncertain — the next user utterance
-                            # will trigger a natural response.
                             if realtime_audio:
                                 session.interrupt()
-                                await asyncio.sleep(0.5)
+                                await asyncio.sleep(0.4)
+                            await session.generate_reply(
+                                instructions="Respond naturally to what the user just said.",
+                                allow_interruptions=True,
+                                input_modality="text",
+                            )
                         except Exception as wd_err:
-                            logger.debug("Watchdog interrupt failed: %s", wd_err)
+                            logger.debug("Watchdog generate_reply failed: %s", wd_err)
+                            # Last resort: just interrupt to reset VAD state
+                            try:
+                                if realtime_audio:
+                                    session.interrupt()
+                            except Exception:
+                                pass
             except asyncio.CancelledError:
                 pass
 
@@ -1309,43 +1315,47 @@ async def entrypoint(ctx: agents.JobContext):
             if _call_failed.is_set():
                 return
 
-            # (b) Wait for the LATER of:
-            #   - Gemini warmed up (GEMINI_SESSION_WARMUP_SEC from entrypoint start)
-            #   - Carrier announcement window (CARRIER_ANNOUNCEMENT_WAIT_SEC after answer)
+            # (b) Poll until it's safe to fire the greeting.
             #
-            # This guarantees: generate_reply() won't time out (Gemini is ready) AND
-            # the carrier "call is being recorded" announcement has finished playing
-            # (so it can't interrupt the greeting mid-sentence and corrupt Gemini's state).
+            # Two hard requirements:
+            #   1. Gemini must be warmed up (generate_reply times out before this).
+            #   2a. Carrier announcement window elapsed (so it can't interrupt greeting), OR
+            #   2b. User already spoke — skip carrier wait; Gemini is already handling
+            #       the user's audio naturally via VAD.
+            #
+            # CRITICAL: if the user spoke while we were waiting, do NOT call interrupt()
+            # before generate_reply.  interrupt() would cancel Gemini's in-progress VAD
+            # response to the user, putting Gemini into a confused/silent state.
             warmup_sec = _get_float_env("GEMINI_SESSION_WARMUP_SEC", 13.0)
             carrier_wait = _get_float_env("CARRIER_ANNOUNCEMENT_WAIT_SEC", 7.0)
 
             gemini_ready_at = _entrypoint_start_at + warmup_sec
-            carrier_done_at = (_call_answered_at[0] or time.time()) + carrier_wait
-            fire_at = max(gemini_ready_at, carrier_done_at)
-            wait_remaining = max(0.0, fire_at - time.time())
+            answered_at = _call_answered_at[0] or time.time()
+            carrier_done_at = answered_at + carrier_wait
 
-            logger.debug(
-                "Greeting fire-at T+%.1fs: gemini_ready=T+%.1f carrier_done=T+%.1f wait=%.1fs",
-                fire_at - _entrypoint_start_at,
-                gemini_ready_at - _entrypoint_start_at,
-                carrier_done_at - _entrypoint_start_at,
-                wait_remaining,
-            )
-
-            if wait_remaining > 0:
-                try:
-                    await asyncio.wait_for(_call_failed.wait(), timeout=wait_remaining)
-                    logger.info("Greeting aborted: SIP call failed during delay.")
+            user_spoke_before_greeting = False
+            while True:
+                if _call_failed.is_set():
                     return
-                except asyncio.TimeoutError:
-                    pass
+                now = time.time()
+                if now < gemini_ready_at:        # always wait for Gemini first
+                    await asyncio.sleep(0.1)
+                    continue
+                user_spoke_before_greeting = last_user_speech_at > answered_at
+                if user_spoke_before_greeting:   # skip carrier wait — user is live
+                    logger.debug("User spoke during carrier wait — firing greeting immediately.")
+                    break
+                if now >= carrier_done_at:       # carrier window elapsed normally
+                    break
+                await asyncio.sleep(0.1)
 
             if _call_failed.is_set():
                 return
 
-            # Single interrupt + brief settle before generate_reply so any Gemini
-            # auto-generation triggered at session.start() is fully cleared.
-            if realtime_audio:
+            # Only interrupt if the user has NOT spoken yet.
+            # If user already spoke, Gemini is mid-generation for that speech —
+            # interrupting it would kill that natural response and corrupt session state.
+            if realtime_audio and not user_spoke_before_greeting:
                 try:
                     session.interrupt()
                     await asyncio.sleep(0.3)
@@ -1355,7 +1365,7 @@ async def entrypoint(ctx: agents.JobContext):
             if _call_failed.is_set():
                 return
 
-            # Play greeting via TTS (session.say). One retry on failure.
+            # Fire greeting. One retry on transient failure.
             for _attempt in range(2):
                 if _call_failed.is_set():
                     logger.info("Greeting aborted mid-retry: SIP call failed.")
