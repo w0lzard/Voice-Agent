@@ -965,6 +965,9 @@ async def entrypoint(ctx: agents.JobContext):
     4. Waits for answer before speaking.
     """
     logger.info(f"Connecting to room: {ctx.room.name}")
+    # Anchor warmup from the very start of entrypoint — session.start() itself
+    # takes 2-4s, so using its return time as the anchor understates elapsed time.
+    _entrypoint_start_at = time.time()
 
     if not _validate_runtime_provider_keys(_use_realtime_audio()):
         ctx.shutdown()
@@ -1196,20 +1199,23 @@ async def entrypoint(ctx: agents.JobContext):
 
         async def _send_greeting_and_start_reprompt() -> None:
             nonlocal last_user_speech_at, reprompt_task
-            # Gemini Live needs ~9-12s from session.start() before generate_reply works.
-            # Calling it earlier always times out, leaving an orphaned Gemini generation that
-            # corrupts session state — so the agent speaks the greeting then goes silent forever.
+            # Gemini Live needs ~13-15s from job start before generate_reply is stable.
+            # Two failure modes if we call too early:
+            #   1) Timeout: SDK waits 5s for generation_created — never fires → raises
+            #   2) "No active generation" corruption: Gemini sends warmup-time content
+            #      that lands while our generate_reply is in-flight, desynchronising
+            #      the SDK's generation tracker → agent speaks greeting but then goes
+            #      permanently silent (subsequent user speech never gets a response).
             #
-            # Strategy: wait until GEMINI_SESSION_WARMUP_SEC have elapsed from when
-            # session.start() + trunk resolution completed (_session_ready_at). For real
-            # calls (user takes 5-10s to pick up) this adds zero post-pickup delay. For
-            # quick-answer tests it may add a few seconds of post-pickup silence, but the
-            # agent will actually respond to user speech.
-            warmup_sec = _get_float_env("GEMINI_SESSION_WARMUP_SEC", 10.0)
-            elapsed = time.time() - _session_ready_at
+            # Fix A — use _entrypoint_start_at (not session.start() return time) so
+            #          the warmup clock accounts for session.start()'s own 2-4s cost.
+            # Fix B — call session.interrupt() + 1s settle BEFORE generate_reply to
+            #          flush any proactive Gemini content from the warmup period.
+            warmup_sec = _get_float_env("GEMINI_SESSION_WARMUP_SEC", 13.0)
+            elapsed = time.time() - _entrypoint_start_at
             delay = max(_get_float_env("GREETING_MIN_DELAY_SEC", 0.5), warmup_sec - elapsed)
             logger.debug(
-                "Greeting delay: %.1fs (warmup=%.0fs, elapsed_since_ready=%.1fs)",
+                "Greeting delay: %.1fs (warmup=%.0fs, elapsed_since_entrypoint=%.1fs)",
                 delay, warmup_sec, elapsed,
             )
             try:
@@ -1220,8 +1226,21 @@ async def entrypoint(ctx: agents.JobContext):
                 pass  # Normal path: warmup elapsed, call still in progress
             if _call_failed.is_set():
                 return
-            # With adequate warmup, attempt 1 should always succeed.
-            # One safety-net retry is kept in case of transient network jitter.
+
+            # Flush any stale Gemini content from the warmup period (Fix B).
+            # Without this, proactive Gemini responses land during our generate_reply
+            # window and corrupt the generation tracker → permanent agent silence.
+            if realtime_audio:
+                try:
+                    session.interrupt()
+                    await asyncio.sleep(1.0)
+                except Exception:
+                    pass
+            if _call_failed.is_set():
+                return
+
+            # With adequate warmup + pre-interrupt, attempt 1 should succeed.
+            # Keep one safety-net retry in case of transient network jitter.
             _max_attempts = 2
             for _attempt in range(_max_attempts):
                 if _call_failed.is_set():
@@ -1237,13 +1256,13 @@ async def entrypoint(ctx: agents.JobContext):
                     _err = str(greet_error).lower()
                     if _attempt == 0 and ("timed out" in _err or "timeout" in _err):
                         logger.warning(
-                            "Greeting timed out despite warmup — Gemini still not ready. "
+                            "Greeting timed out — Gemini still not ready after warmup+interrupt. "
                             "Retrying once after 2s. Consider increasing GEMINI_SESSION_WARMUP_SEC."
                         )
                         if realtime_audio:
                             try:
                                 session.interrupt()
-                                await asyncio.sleep(0.3)
+                                await asyncio.sleep(0.5)
                             except Exception:
                                 pass
                         await asyncio.sleep(2.0)
