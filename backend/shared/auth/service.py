@@ -1,7 +1,6 @@
 """Authentication service."""
 import secrets
 import hashlib
-import random
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Tuple
@@ -31,8 +30,8 @@ class AuthService:
     
     @staticmethod
     def _generate_otp() -> str:
-        """Generate a 6-digit OTP."""
-        return f"{random.randint(100000, 999999)}"
+        """Generate a cryptographically secure 6-digit OTP."""
+        return f"{100000 + secrets.randbelow(900000)}"
 
     @staticmethod
     async def _store_otp(user_id: str, otp: str):
@@ -91,15 +90,20 @@ class AuthService:
         otp = AuthService._generate_otp()
         await AuthService._store_otp(user.user_id, otp)
 
+        email_sent = False
+        email_error = None
         try:
             from shared.email_service import send_otp_email
             await send_otp_email(user.email, otp, user.name)
+            email_sent = True
         except Exception as e:
+            email_error = str(e)
             logger.error(f"Failed to send OTP email to {user.email}: {e}")
-            # Log OTP to console as fallback so admin can see it
+            # OTP is in DB — user can still verify via /auth/resend-code once
+            # the email service is configured correctly.
             logger.warning(f"OTP for {user.email}: {otp}")
 
-        return user, workspace
+        return user, workspace, email_sent, email_error
 
     @staticmethod
     async def verify_otp(email: str, code: str) -> Tuple[User, TokenResponse]:
@@ -163,14 +167,16 @@ class AuthService:
         otp = AuthService._generate_otp()
         await AuthService._store_otp(user.user_id, otp)
 
+        email_sent = False
         try:
             from shared.email_service import send_otp_email
             await send_otp_email(user.email, otp, user.name)
+            email_sent = True
         except Exception as e:
             logger.error(f"Failed to resend OTP to {user.email}: {e}")
             logger.warning(f"OTP for {user.email}: {otp}")
 
-        return True
+        return email_sent
     
     @staticmethod
     async def login(request: LoginRequest) -> Tuple[User, TokenResponse]:

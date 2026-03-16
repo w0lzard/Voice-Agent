@@ -5,6 +5,10 @@ import httpx
 logger = logging.getLogger("email_service")
 
 RESEND_API_URL = "https://api.resend.com/emails"
+# Resend's onboarding@resend.dev is a SANDBOX sender — it can ONLY deliver to
+# the Resend account owner's own email address.  Any other recipient will be
+# rejected with HTTP 403.  Always set EMAIL_FROM to a verified-domain address.
+_SANDBOX_SENDER = "onboarding@resend.dev"
 
 
 async def send_otp_email(to_email: str, otp: str, name: str = "User"):
@@ -13,7 +17,17 @@ async def send_otp_email(to_email: str, otp: str, name: str = "User"):
 
     if not config.RESEND_API_KEY:
         logger.error("RESEND_API_KEY not set — cannot send email")
-        raise RuntimeError("Email service not configured. Set RESEND_API_KEY in Railway.")
+        raise RuntimeError("Email service not configured. Set RESEND_API_KEY in environment.")
+
+    from_address = config.EMAIL_FROM or f"AI Call Agent <{_SANDBOX_SENDER}>"
+    if _SANDBOX_SENDER in from_address:
+        logger.warning(
+            "EMAIL_FROM is using Resend's sandbox sender (%s). "
+            "This can ONLY deliver to the Resend account owner's email — "
+            "set EMAIL_FROM=noreply@yourdomain.com (verified domain) "
+            "to send to any recipient.",
+            _SANDBOX_SENDER,
+        )
 
     html = f"""
     <!DOCTYPE html>
@@ -59,7 +73,7 @@ async def send_otp_email(to_email: str, otp: str, name: str = "User"):
     """
 
     payload = {
-        "from": config.EMAIL_FROM or "AI Call Agent <onboarding@resend.dev>",
+        "from": from_address,
         "to": [to_email],
         "subject": "Your verification code – AI Call Agent",
         "html": html,
@@ -76,7 +90,19 @@ async def send_otp_email(to_email: str, otp: str, name: str = "User"):
         )
 
     if response.status_code not in (200, 201):
-        logger.error(f"Resend API error {response.status_code}: {response.text}")
-        raise RuntimeError(f"Failed to send email: {response.text}")
+        # Log the full Resend error so the root cause is visible in logs
+        logger.error(
+            "Resend API error %s sending to %s: %s",
+            response.status_code,
+            to_email,
+            response.text,
+        )
+        if response.status_code == 403 and _SANDBOX_SENDER in from_address:
+            raise RuntimeError(
+                f"Resend rejected the email (403). You are using the sandbox sender "
+                f"'{_SANDBOX_SENDER}' which can only deliver to the Resend account "
+                f"owner's address. Set EMAIL_FROM to a verified-domain address."
+            )
+        raise RuntimeError(f"Failed to send email ({response.status_code}): {response.text}")
 
-    logger.info(f"OTP email sent to {to_email} via Resend")
+    logger.info("OTP email sent to %s via Resend (from=%s)", to_email, from_address)

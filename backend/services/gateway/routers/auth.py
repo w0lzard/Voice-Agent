@@ -24,13 +24,23 @@ async def signup(request: SignupRequest):
     Tokens are only issued after the email is verified via /auth/verify.
     """
     try:
-        user, workspace = await AuthService.signup(request)
-        return {
+        user, workspace, email_sent, email_error = await AuthService.signup(request)
+        response = {
             "ok": True,
             "needsVerification": True,
             "email": user.email,
-            "message": "Account created. Check your email for the verification code.",
+            "emailSent": email_sent,
         }
+        if email_sent:
+            response["message"] = "Account created. Check your email for the verification code."
+        else:
+            response["message"] = (
+                "Account created but the verification email could not be sent. "
+                "Please contact support or try resending the code."
+            )
+            if email_error:
+                response["emailError"] = email_error
+        return response
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -97,8 +107,16 @@ async def verify_email(request: VerifyEmailRequest):
 @router.post("/resend-code", response_model=dict)
 async def resend_code(request: ResendCodeRequest):
     """Resend OTP verification code."""
-    await AuthService.resend_otp(request.email)
-    return {"ok": True, "message": "Verification code sent."}
+    email_sent = await AuthService.resend_otp(request.email)
+    return {
+        "ok": True,
+        "emailSent": email_sent,
+        "message": (
+            "Verification code sent."
+            if email_sent
+            else "Could not send verification email. Please contact support."
+        ),
+    }
 
 
 @router.post("/refresh", response_model=TokenResponse)
