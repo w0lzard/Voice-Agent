@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { fetchStats, fetchCalls, fetchWallet } from '../../lib/api';
+import { fetchStats, fetchCalls, fetchWallet, getAuthHeaders } from '../../lib/api';
 
 export default function LiveMonitorPage() {
   const [statsData, setStatsData] = useState(null);
@@ -13,6 +13,7 @@ export default function LiveMonitorPage() {
     let isMounted = true;
 
     async function fetchData() {
+      if (!getAuthHeaders().Authorization) return; // skip when not logged in
       try {
         const [statsRes, activeRes, walletRes] = await Promise.all([
           fetchStats().catch(() => null),

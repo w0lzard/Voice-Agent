@@ -1,6 +1,6 @@
 'use client';
 import { useState, useEffect, useRef } from 'react';
-import { fetchStats, fetchCalls, fetchWallet, fetchStartCall, fetchSystemLogs } from '../lib/api';
+import { fetchStats, fetchCalls, fetchWallet, fetchStartCall, fetchSystemLogs, getAuthHeaders } from '../lib/api';
 
 // Force turbopack to invalidate and pick up new fetchWallet component
 export default function DashboardPage() {
@@ -42,6 +42,7 @@ export default function DashboardPage() {
     let isMounted = true;
 
     async function loadDashboardData() {
+      if (!getAuthHeaders().Authorization) return; // skip when not logged in
       try {
         const [walletRes, statsRes, activeRes, queuedRes, logsRes] = await Promise.all([
           fetchWallet().catch(() => null),
