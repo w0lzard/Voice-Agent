@@ -1313,8 +1313,5 @@ if __name__ == "__main__":
             prewarm_fnc=prewarm,
             agent_name="outbound-caller",
             num_idle_processes=max(0, _get_int_env("AGENT_NUM_IDLE_PROCESSES", 1)),
-            # Hard cap at LiveKit worker level — our entrypoint enforces the same
-            # limit in-process and plays a "busy" message for inbound overflow calls.
-            max_concurrent_jobs=MAX_CONCURRENT_CALLS,
         )
     )
