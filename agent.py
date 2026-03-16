@@ -944,6 +944,9 @@ async def entrypoint(ctx: agents.JobContext):
         return None
 
     resolved_trunk_id = await _start_session_and_resolve_trunk()
+    # Timestamp when session.start() + trunk resolution both completed.
+    # Used to compute how much longer Gemini needs before it accepts generate_reply.
+    _session_ready_at = time.time()
 
     @session.on("user_input_transcribed")
     def _on_user_input_transcribed(ev) -> None:
@@ -1046,21 +1049,33 @@ async def entrypoint(ctx: agents.JobContext):
 
         async def _send_greeting_and_start_reprompt() -> None:
             nonlocal last_user_speech_at, reprompt_task
-            # Gemini WebSocket may still be establishing when participant_connected fires.
-            # A longer initial delay (2.0s default) prevents the first generate_reply from
-            # timing out and leaving orphaned Gemini responses that corrupt session state.
-            # Use wait() so we can abort immediately if the SIP call is rejected while sleeping.
-            delay = _get_float_env("GREETING_INITIAL_DELAY_SEC", 2.0)
+            # Gemini Live needs ~9-12s from session.start() before generate_reply works.
+            # Calling it earlier always times out, leaving an orphaned Gemini generation that
+            # corrupts session state — so the agent speaks the greeting then goes silent forever.
+            #
+            # Strategy: wait until GEMINI_SESSION_WARMUP_SEC have elapsed from when
+            # session.start() + trunk resolution completed (_session_ready_at). For real
+            # calls (user takes 5-10s to pick up) this adds zero post-pickup delay. For
+            # quick-answer tests it may add a few seconds of post-pickup silence, but the
+            # agent will actually respond to user speech.
+            warmup_sec = _get_float_env("GEMINI_SESSION_WARMUP_SEC", 10.0)
+            elapsed = time.time() - _session_ready_at
+            delay = max(_get_float_env("GREETING_MIN_DELAY_SEC", 0.5), warmup_sec - elapsed)
+            logger.debug(
+                "Greeting delay: %.1fs (warmup=%.0fs, elapsed_since_ready=%.1fs)",
+                delay, warmup_sec, elapsed,
+            )
             try:
                 await asyncio.wait_for(_call_failed.wait(), timeout=delay)
-                # _call_failed was set — call already failed, abort before speaking.
-                logger.info("Greeting aborted: SIP call failed before delay elapsed.")
+                logger.info("Greeting aborted: SIP call failed before warmup elapsed.")
                 return
             except asyncio.TimeoutError:
-                pass  # Normal path: delay elapsed, call still in progress
+                pass  # Normal path: warmup elapsed, call still in progress
             if _call_failed.is_set():
                 return
-            _max_attempts = 6
+            # With adequate warmup, attempt 1 should always succeed.
+            # One safety-net retry is kept in case of transient network jitter.
+            _max_attempts = 2
             for _attempt in range(_max_attempts):
                 if _call_failed.is_set():
                     logger.info("Greeting aborted mid-retry: SIP call failed.")
@@ -1070,26 +1085,21 @@ async def entrypoint(ctx: agents.JobContext):
                     logger.info("Initial greeting sent.")
                     break
                 except asyncio.CancelledError:
-                    raise  # Propagate task cancellation cleanly
+                    raise
                 except Exception as greet_error:
                     _err = str(greet_error).lower()
-                    if _attempt < _max_attempts - 1 and ("timed out" in _err or "timeout" in _err):
-                        # Cap backoff at 3s: 0.5, 1.0, 1.5, 2.0, 2.5 (capped)
-                        _wait = min(0.5 * (_attempt + 1), 3.0)
+                    if _attempt == 0 and ("timed out" in _err or "timeout" in _err):
                         logger.warning(
-                            "Greeting timed out (model not ready yet), "
-                            f"retrying in {_wait:.1f}s... (attempt {_attempt + 1}/{_max_attempts})"
+                            "Greeting timed out despite warmup — Gemini still not ready. "
+                            "Retrying once after 2s. Consider increasing GEMINI_SESSION_WARMUP_SEC."
                         )
-                        # Interrupt any in-flight Gemini generation before retrying.
-                        # Without this, the orphaned response corrupts session state so the
-                        # agent never responds to user speech after the greeting.
                         if realtime_audio:
                             try:
                                 session.interrupt()
-                                await asyncio.sleep(0.2)  # brief settle after interrupt
-                            except Exception as int_e:
-                                logger.debug("session.interrupt() during greeting retry: %s", int_e)
-                        await asyncio.sleep(_wait)
+                                await asyncio.sleep(0.3)
+                            except Exception:
+                                pass
+                        await asyncio.sleep(2.0)
                     else:
                         logger.warning(f"Greeting failed: {greet_error}")
                         break
