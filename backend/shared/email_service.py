@@ -90,19 +90,32 @@ async def send_otp_email(to_email: str, otp: str, name: str = "User"):
         )
 
     if response.status_code not in (200, 201):
+        body = response.text
         # Log the full Resend error so the root cause is visible in logs
         logger.error(
             "Resend API error %s sending to %s: %s",
             response.status_code,
             to_email,
-            response.text,
+            body,
         )
-        if response.status_code == 403 and _SANDBOX_SENDER in from_address:
-            raise RuntimeError(
-                f"Resend rejected the email (403). You are using the sandbox sender "
-                f"'{_SANDBOX_SENDER}' which can only deliver to the Resend account "
-                f"owner's address. Set EMAIL_FROM to a verified-domain address."
-            )
-        raise RuntimeError(f"Failed to send email ({response.status_code}): {response.text}")
+        if response.status_code == 403:
+            if _SANDBOX_SENDER in from_address:
+                raise RuntimeError(
+                    f"Resend rejected the email (403). You are using the sandbox sender "
+                    f"'{_SANDBOX_SENDER}' which can only deliver to the Resend account "
+                    f"owner's address. Set EMAIL_FROM to a verified-domain address."
+                )
+            if "not verified" in body or "domain" in body.lower():
+                # Extract sender domain for a clear actionable message
+                import re
+                sender_domain = re.search(r"@([\w.-]+)", from_address)
+                sender_domain = sender_domain.group(1) if sender_domain else from_address
+                raise RuntimeError(
+                    f"Resend rejected the email (403): the sender domain '{sender_domain}' "
+                    f"is not verified. You cannot use public domains like gmail.com/yahoo.com. "
+                    f"Set EMAIL_FROM to an address on a domain YOU own and have verified at "
+                    f"https://resend.com/domains — e.g. EMAIL_FROM=noreply@yourdomain.com"
+                )
+        raise RuntimeError(f"Failed to send email ({response.status_code}): {body}")
 
     logger.info("OTP email sent to %s via Resend (from=%s)", to_email, from_address)
