@@ -135,28 +135,6 @@ export default function VoicePage() {
             })}
           </div>
 
-          {/* Voice Training Banner */}
-          <div className="rounded-2xl border border-primary/20 p-5 flex items-center gap-5 relative overflow-hidden"
-            style={{background: 'linear-gradient(135deg, rgba(43,108,238,0.08), rgba(139,92,246,0.05))'}}>
-            <div className="absolute right-4 opacity-5">
-              <span className="material-symbols-outlined text-[120px]">graphic_eq</span>
-            </div>
-            <div className="flex-1 relative z-10">
-              <h2 className="text-sm font-bold text-slate-100 mb-1">Use your own voice?</h2>
-              <p className="text-xs text-slate-500 leading-relaxed">Record a 60-second clip to create a personalized AI voice clone.</p>
-            </div>
-            <button
-              onClick={() => setIsRecording(!isRecording)}
-              className={`relative z-10 px-4 py-2.5 rounded-xl font-semibold text-sm text-white flex items-center gap-2 transition-all ${
-                isRecording ? 'bg-red-500' : 'bg-primary hover:bg-primary/90'
-              }`}
-              style={{boxShadow: isRecording ? '0 4px 14px rgba(239,68,68,0.3)' : '0 4px 14px rgba(43,108,238,0.3)'}}
-            >
-              {isRecording && <span className="absolute inset-0 rounded-xl bg-red-600 animate-pulse opacity-50"></span>}
-              <span className="material-symbols-outlined text-base relative z-10">{isRecording ? 'stop_circle' : 'mic'}</span>
-              <span className="relative z-10">{isRecording ? 'Stop' : 'Record'}</span>
-            </button>
-          </div>
         </div>
 
         {/* Right: Visualizer + Controls */}
@@ -247,6 +225,88 @@ export default function VoicePage() {
         </div>
       </div>
 
+      {/* ─── Use Your Own Voice — full-width expanded ──────────────────── */}
+      <div className="rounded-2xl border border-primary/20 relative overflow-hidden"
+        style={{background: 'linear-gradient(135deg, rgba(43,108,238,0.07), rgba(139,92,246,0.04))'}}>
+        {/* background watermark */}
+        <div className="absolute right-0 top-0 bottom-0 flex items-center pr-10 pointer-events-none select-none opacity-[0.04]">
+          <span className="material-symbols-outlined text-[200px] text-white">graphic_eq</span>
+        </div>
+
+        <div className="relative z-10 p-6 grid grid-cols-1 lg:grid-cols-3 gap-8 items-center">
+          {/* Left — title + description */}
+          <div className="lg:col-span-1 space-y-3">
+            <div className="flex items-center gap-3">
+              <div className="size-10 rounded-xl bg-primary/15 flex items-center justify-center shrink-0">
+                <span className="material-symbols-outlined text-primary text-xl">record_voice_over</span>
+              </div>
+              <div>
+                <h2 className="text-base font-bold text-slate-100">Use your own voice</h2>
+                <p className="text-[11px] text-slate-500">Create a personalized AI voice clone</p>
+              </div>
+            </div>
+            <p className="text-xs text-slate-400 leading-relaxed">
+              Record a short 60-second clip and our AI will model your vocal tone, pitch, and cadence — making every agent call sound unmistakably like you.
+            </p>
+            {isRecording && (
+              <div className="flex items-center gap-2 text-xs text-red-400 font-semibold">
+                <span className="size-2 rounded-full bg-red-400 animate-pulse"></span>
+                Recording in progress…
+              </div>
+            )}
+          </div>
+
+          {/* Middle — steps */}
+          <div className="lg:col-span-1 grid grid-cols-3 gap-3">
+            {[
+              { n: '01', icon: 'mic', label: 'Record', desc: '60-second voice sample' },
+              { n: '02', icon: 'auto_fix_high', label: 'Process', desc: 'AI models your voice' },
+              { n: '03', icon: 'check_circle', label: 'Deploy', desc: 'Activate on your agents' },
+            ].map(step => (
+              <div key={step.n} className="flex flex-col items-center text-center gap-2 px-2 py-3 rounded-xl border border-white/5" style={{background: 'rgba(255,255,255,0.02)'}}>
+                <span className="text-[10px] font-bold text-primary/60 font-mono">{step.n}</span>
+                <span className="material-symbols-outlined text-primary text-xl">{step.icon}</span>
+                <div>
+                  <p className="text-[11px] font-bold text-slate-200">{step.label}</p>
+                  <p className="text-[10px] text-slate-600 mt-0.5 leading-tight">{step.desc}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Right — waveform + button */}
+          <div className="lg:col-span-1 flex flex-col items-center gap-4">
+            {/* mini waveform */}
+            <div className={`flex items-end justify-center gap-1 h-14 w-full ${isRecording ? 'wave-playing' : ''}`}>
+              {[...Array(28)].map((_, i) => {
+                const h = [20,50,80,100,70,40,90,60,30,85,100,55,35,75,100,65,45,90,50,30,80,100,60,40,70,95,45,25][i % 28];
+                return (
+                  <div key={i} className="wave-bar w-1 rounded-full"
+                    style={{
+                      height: isRecording ? `${h}%` : '3px',
+                      background: isRecording ? `rgba(43,108,238,${h/100})` : 'rgba(255,255,255,0.12)',
+                      animationDelay: `${(i * 0.04).toFixed(2)}s`,
+                    }}
+                  />
+                );
+              })}
+            </div>
+            <button
+              onClick={() => setIsRecording(!isRecording)}
+              className={`w-full flex items-center justify-center gap-2.5 py-3 rounded-xl font-semibold text-sm text-white transition-all relative overflow-hidden ${
+                isRecording ? 'bg-red-500 hover:bg-red-600' : 'bg-primary hover:bg-primary/90'
+              }`}
+              style={{boxShadow: isRecording ? '0 4px 20px rgba(239,68,68,0.35)' : '0 4px 20px rgba(43,108,238,0.35)'}}
+            >
+              {isRecording && <span className="absolute inset-0 bg-red-600 animate-pulse opacity-30 rounded-xl"></span>}
+              <span className="material-symbols-outlined text-[20px] relative z-10">{isRecording ? 'stop_circle' : 'mic'}</span>
+              <span className="relative z-10">{isRecording ? 'Stop Recording' : 'Start Recording'}</span>
+            </button>
+            <p className="text-[10px] text-slate-600 text-center">Speak naturally — no script needed</p>
+          </div>
+        </div>
+      </div>
+
       {/* ─── Test Call Section ─────────────────────────────────────────── */}
       <div className="rounded-2xl border border-white/8 overflow-hidden" style={{background: 'rgba(255,255,255,0.03)'}}>
         {/* Header */}
@@ -319,7 +379,7 @@ export default function VoicePage() {
                 <span className="material-symbols-outlined absolute left-3 top-3 text-slate-600 text-[18px] pointer-events-none">edit_note</span>
                 <textarea
                   rows={1}
-                  placeholder="e.g. Greet as Sarah, ask about their product needs..."
+                  placeholder="e.g. Greet warmly, introduce as Sarah, ask about needs..."
                   value={testInstructions}
                   onChange={e => setTestInstructions(e.target.value)}
                   className="w-full pl-9 pr-4 py-3 rounded-xl text-sm bg-white/5 border border-white/8 text-slate-200 placeholder-slate-600 focus:outline-none focus:border-primary/50 transition-colors resize-none"
