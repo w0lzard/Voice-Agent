@@ -1015,19 +1015,36 @@ async def entrypoint(ctx: agents.JobContext):
         # returns from the API, saving the API-response round-trip delay.
         _greeting_triggered = False
         _greeting_task: asyncio.Task | None = None
+        # Set when the SIP call fails so the greeting task aborts before generate_reply.
+        _call_failed = asyncio.Event()
 
         async def _send_greeting_and_start_reprompt() -> None:
             nonlocal last_user_speech_at, reprompt_task
             # Gemini WebSocket may still be establishing when participant_connected fires.
             # A longer initial delay (2.0s default) prevents the first generate_reply from
             # timing out and leaving orphaned Gemini responses that corrupt session state.
-            await asyncio.sleep(_get_float_env("GREETING_INITIAL_DELAY_SEC", 2.0))
+            # Use wait() so we can abort immediately if the SIP call is rejected while sleeping.
+            delay = _get_float_env("GREETING_INITIAL_DELAY_SEC", 2.0)
+            try:
+                await asyncio.wait_for(_call_failed.wait(), timeout=delay)
+                # _call_failed was set — call already failed, abort before speaking.
+                logger.info("Greeting aborted: SIP call failed before delay elapsed.")
+                return
+            except asyncio.TimeoutError:
+                pass  # Normal path: delay elapsed, call still in progress
+            if _call_failed.is_set():
+                return
             _max_attempts = 6
             for _attempt in range(_max_attempts):
+                if _call_failed.is_set():
+                    logger.info("Greeting aborted mid-retry: SIP call failed.")
+                    return
                 try:
                     await _speak_scripted_line(session, text=first_message, realtime_audio=realtime_audio)
                     logger.info("Initial greeting sent.")
                     break
+                except asyncio.CancelledError:
+                    raise  # Propagate task cancellation cleanly
                 except Exception as greet_error:
                     _err = str(greet_error).lower()
                     if _attempt < _max_attempts - 1 and ("timed out" in _err or "timeout" in _err):
@@ -1085,6 +1102,15 @@ async def entrypoint(ctx: agents.JobContext):
 
         except Exception as e:
             logger.error(f"Failed to place outbound call: {e}")
+            # Signal greeting task to abort BEFORE calling generate_reply.
+            _call_failed.set()
+            # Interrupt any Gemini generation that may already be in-flight so the
+            # SDK does not log a spurious ERROR for the generate_reply timeout.
+            if realtime_audio:
+                try:
+                    session.interrupt()
+                except Exception:
+                    pass
             if _greeting_task and not _greeting_task.done():
                 _greeting_task.cancel()
             if reprompt_task and not reprompt_task.done():
