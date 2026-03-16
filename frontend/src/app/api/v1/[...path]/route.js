@@ -47,7 +47,7 @@ const PATTERN_STUBS = [
   { method: 'GET',    pattern: /^\/calls\/[^/]+\/transcript$/, response: { ok: true, data: null } },
   { method: 'GET',    pattern: /^\/calls\/[^/]+\/recordings$/, response: { ok: true, data: [] } },
   { method: 'PUT',    pattern: /^\/auth\/(profile|password)$/, response: { ok: true } },
-  { method: 'POST',   pattern: /^\/auth\/resend-code$/,         response: { ok: true, message: 'Code sent' } },
+  // NOTE: /auth/resend-code is NOT stubbed — it must reach the backend to send the OTP
 ];
 
 // ─── Response normalisation ───────────────────────────────────────────────────
@@ -101,8 +101,15 @@ async function handleRequest(request, { params }, method) {
   const searchParams = new URL(request.url).searchParams.toString();
   const backendUrl = `${GATEWAY_URL}${skipApiPrefix ? '' : '/api'}${backendPath}${searchParams ? '?' + searchParams : ''}`;
 
-  const headers = {};
   const auth = request.headers.get('authorization');
+
+  // Short-circuit authenticated-only list endpoints when there is no token —
+  // avoids flooding the backend with 401s from unauthenticated pollers.
+  if (!auth && /^\/(calls|assistants|campaigns)(\/|$)/.test(path) && method === 'GET') {
+    return NextResponse.json({ ok: true, data: [], total: 0, count: 0 });
+  }
+
+  const headers = {};
   if (auth) headers['Authorization'] = auth;
 
   const fetchOptions = { method, headers };

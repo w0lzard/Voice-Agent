@@ -337,10 +337,12 @@ export function WebSocketProvider({ children }) {
     dispatch({ type: WS_ACTIONS.DISCONNECT });
   }, []);
 
-  // Auto-connect on mount
+  // Auto-connect on mount — only when a token is present so we don't open
+  // unauthenticated WebSocket connections for logged-out visitors.
   useEffect(() => {
+    const hasToken = typeof window !== 'undefined' && !!localStorage.getItem('ea_token');
+    if (!hasToken) return;
     connect();
-
     return () => {
       disconnect();
     };
