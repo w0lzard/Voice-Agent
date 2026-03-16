@@ -19,9 +19,9 @@ function CampaignSelector({ selectedId, onSelect }) {
 
   useEffect(() => {
     fetch(`${API_BASE}/v1/campaigns`, { headers: getAuthHeaders() })
-      .then(r => r.json()).then(d => d.ok && setCampaigns(d.data)).catch(() => {});
+      .then(r => r.json()).then(d => setCampaigns(Array.isArray(d.data) ? d.data : [])).catch(() => {});
     fetch(`${API_BASE}/v1/knowledge-bases`, { headers: getAuthHeaders() })
-      .then(r => r.json()).then(d => d.ok && setKbs(d.data)).catch(() => {});
+      .then(r => r.json()).then(d => setKbs(Array.isArray(d.data) ? d.data : [])).catch(() => {});
   }, []);
 
   const createCampaign = async () => {
@@ -108,7 +108,7 @@ export default function CSVManagement() {
   const fetchHistory = () => {
     fetch(`${API_BASE}/v1/uploads`, { headers: getAuthHeaders() })
       .then(r => r.json())
-      .then(d => d.ok && setHistory(d.data))
+      .then(d => setHistory(Array.isArray(d.data) ? d.data : []))
       .catch(() => {});
   };
 
