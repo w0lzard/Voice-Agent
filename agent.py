@@ -1,11 +1,16 @@
 import asyncio
 import logging
 import os
+import sys
 import json
 import time
 import threading
 from pathlib import Path
 from dotenv import load_dotenv
+
+# Make scripts/ importable regardless of working directory
+sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
+from agent_script import AGENT_SCRIPT  # noqa: E402
 from openai.types.beta.realtime.session import InputAudioTranscription, TurnDetection
 
 from livekit import agents, api
@@ -722,60 +727,10 @@ class TransferFunctions(llm.ToolContext):
 
 
 def _build_agent_instructions() -> str:
+    """Build agent instructions from scripts/agent_script.py (single source of truth)."""
     agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
     company = os.getenv("AGENT_COMPANY_NAME", "real estate company")
-    default_language = os.getenv("AGENT_DEFAULT_LANGUAGE", "hi").strip().lower()
-
-    if default_language == "hi":
-        language_rule = (
-            "Speak Hindi by default. Switch to English or Hinglish if the caller uses it. "
-            "Use natural spoken Hindi — not formal written Hindi. Short sentences only."
-        )
-        filler_rule = (
-            'Every REPLY to the user must begin with a spoken filler. (The opening greeting is exempt.)\n'
-            '  • Short answer → "Haan ji," / "Achha," / "Bilkul," / "Theek hai,"\n'
-            '  • Thinking/processing → "Hmm..." or "Ek second..." THEN answer\n'
-            '  • Confusion → "Sorry, ek baar phir se bata sakte hain?"\n'
-            '  • Agreeing → "Ji bilkul," / "Haan, zaroor,"\n'
-            'BAD reply: "Toh aap kya chahte hain?" — no filler\n'
-            'GOOD reply: "Achha, toh aap kya chahte hain?" — has filler\n'
-            'RESPOND IMMEDIATELY when the user pauses — do not wait to see if they continue.'
-        )
-    else:
-        language_rule = "Speak English by default. Switch to Hindi or Hinglish if the caller uses it. Short sentences only."
-        filler_rule = (
-            'Every REPLY to the user must begin with a spoken filler. (The opening greeting is exempt.)\n'
-            '  • Short answer → "Right," / "Got it," / "Sure," / "I see,"\n'
-            '  • Thinking → "Hmm..." or "One moment..." THEN answer\n'
-            '  • Confusion → "Sorry, could you say that again?"\n'
-            '  • Agreeing → "Absolutely," / "Of course,"\n'
-            'BAD reply: "Are you looking to buy or rent?" — no filler\n'
-            'GOOD reply: "Right, are you looking to buy or rent?" — has filler\n'
-            'RESPOND IMMEDIATELY when the user pauses — do not wait to see if they continue.'
-        )
-
-    return f"""You are {agent_name}, a warm and friendly human voice assistant from {company}.
-
-LANGUAGE: {language_rule}
-
-FILLER WORDS — MANDATORY:
-{filler_rule}
-
-CONVERSATION STYLE:
-- Keep replies to 1-2 short sentences — this is a phone call
-- Ask only ONE question at a time
-- NEVER say you are an AI or a bot — you are {agent_name}, a real person
-- Mirror caller's energy: warm when friendly, calm when serious
-- If caller says something unclear, ask to repeat rather than guess
-
-CONVERSATION FLOW:
-1. After caller acknowledges greeting → ask if it's a good time to talk
-2. If yes → qualify gently: intent (buy/rent/invest), property type, budget, location
-3. If no → ask for a good callback time, then end politely
-4. If not interested → thank them warmly and say goodbye
-5. If caller is confused → rephrase simply and ask again
-
-TRANSFER: Use transfer_call ONLY if caller clearly says "transfer me" or "connect to agent". Never on short, noisy, or ambiguous input."""
+    return AGENT_SCRIPT.format(agent_name=agent_name, company=company)
 
 
 class OutboundAssistant(Agent):
