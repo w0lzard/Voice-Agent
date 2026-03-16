@@ -4,7 +4,8 @@
       "Bash(python -c \"import secrets; print\\(''JWT:'', secrets.token_hex\\(32\\)\\); print\\(''API:'', secrets.token_hex\\(32\\)\\)\")",
       "Bash(.venv/Scripts/pip install:*)",
       "Bash(npm install:*)",
-      "Bash(/d/Voice-AI-Platform/.venv/Scripts/pip install:*)"
+      "Bash(/d/Voice-AI-Platform/.venv/Scripts/pip install:*)",
+      "Bash(git add:*)"
     ]
   }
 }

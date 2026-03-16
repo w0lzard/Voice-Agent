@@ -163,14 +163,15 @@ async def queue_campaign(
     campaign_id: str,
     user: User = Depends(get_current_user)
 ):
-    """Queue a campaign for execution via Celery."""
+    """Queue a campaign for background execution."""
     from .tasks_queue.tasks import execute_campaign
-    
-    task = execute_campaign.delay(campaign_id)
+    from .tasks_queue.celery_app import submit_task
+
+    task_id = submit_task(execute_campaign(campaign_id))
     return {
         "status": "queued",
         "campaign_id": campaign_id,
-        "task_id": task.id
+        "task_id": task_id,
     }
 
 
@@ -180,11 +181,13 @@ async def get_job_status(
     user: User = Depends(get_current_user)
 ):
     """Get status of a queued job."""
-    from .tasks_queue.celery_app import celery_app
-    
-    result = celery_app.AsyncResult(task_id)
+    from .tasks_queue.celery_app import get_task_result
+
+    info = get_task_result(task_id)
+    if info is None:
+        return {"task_id": task_id, "status": "UNKNOWN", "result": None}
     return {
         "task_id": task_id,
-        "status": result.status,
-        "result": result.result if result.ready() else None
+        "status": info["status"],
+        "result": info.get("result"),
     }

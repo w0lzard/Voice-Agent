@@ -12,7 +12,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from shared.database.connection import get_database
-from config.cache.redis_cache import RedisCache
 
 logger = logging.getLogger("config-service.phones")
 router = APIRouter()
@@ -94,20 +93,12 @@ async def list_phone_numbers(
 
 @router.get("/{phone_id}")
 async def get_phone_number(phone_id: str):
-    """Get phone by ID (from cache first)."""
-    cached = await RedisCache.get_phone(phone_id)
-    if cached:
-        return cached
-    
+    """Get phone by ID."""
     db = get_database()
     doc = await db.phone_numbers.find_one({"phone_id": phone_id})
-    
     if not doc:
         raise HTTPException(status_code=404, detail="Phone not found")
-    
     doc.pop("_id", None)
-    await RedisCache.cache_phone(phone_id, doc)
-    
     return doc
 
 

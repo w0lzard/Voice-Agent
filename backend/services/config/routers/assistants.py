@@ -13,7 +13,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from shared.database.connection import get_database
-from config.cache.redis_cache import RedisCache
 
 logger = logging.getLogger("config-service.assistants")
 router = APIRouter()
@@ -73,10 +72,6 @@ async def create_assistant(
     }
     
     await db.assistants.insert_one(assistant)
-    
-    # Cache immediately
-    await RedisCache.cache_assistant(assistant["assistant_id"], assistant)
-    
     logger.info(f"Created assistant: {assistant['assistant_id']} (workspace: {x_workspace_id})")
     return {"assistant_id": assistant["assistant_id"], "name": assistant["name"], "message": "Created"}
 
@@ -115,25 +110,12 @@ async def list_assistants(
 
 @router.get("/{assistant_id}")
 async def get_assistant(assistant_id: str):
-    """Get assistant by ID (from cache first)."""
-    # Try cache first
-    cached = await RedisCache.get_assistant(assistant_id)
-    if cached:
-        logger.debug(f"Cache hit: {assistant_id}")
-        return cached
-    
-    # Fallback to DB
+    """Get assistant by ID."""
     db = get_database()
     doc = await db.assistants.find_one({"assistant_id": assistant_id})
-    
     if not doc:
         raise HTTPException(status_code=404, detail="Assistant not found")
-    
     doc.pop("_id", None)
-    
-    # Cache for next time
-    await RedisCache.cache_assistant(assistant_id, doc)
-    
     return doc
 
 
@@ -161,8 +143,6 @@ async def update_assistant(assistant_id: str, request: UpdateAssistantRequest):
         
         if result:
             result.pop("_id", None)
-            # Update cache
-            await RedisCache.cache_assistant(assistant_id, result)
             return {"assistant_id": assistant_id, "message": "Updated"}
     
     raise HTTPException(status_code=404, detail="Assistant not found")
@@ -176,8 +156,6 @@ async def delete_assistant(assistant_id: str):
     result = await db.assistants.delete_one({"assistant_id": assistant_id})
     
     if result.deleted_count > 0:
-        # Remove from cache
-        await RedisCache.delete(RedisCache.assistant_key(assistant_id))
         return {"message": "Deleted"}
     
     raise HTTPException(status_code=404, detail="Assistant not found")

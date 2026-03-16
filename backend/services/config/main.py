@@ -1,9 +1,7 @@
 """
 Configuration Service - Microservice for managing AI agent configurations.
 Handles: Assistants, Phone Numbers, SIP Configs
-Includes Redis caching for fast access during calls.
 """
-import os
 import logging
 from contextlib import asynccontextmanager
 
@@ -16,7 +14,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from config.routers import assistants, phone_numbers, sip_configs
-from config.cache.redis_cache import RedisCache
 from shared.database.connection import connect_to_database, close_database_connection
 from shared.settings import config
 
@@ -32,25 +29,16 @@ logger = logging.getLogger("config-service")
 async def lifespan(app: FastAPI):
     """Startup and shutdown events."""
     logger.info("Starting Configuration Service...")
-    
-    # Connect to MongoDB (required for routers)
     await connect_to_database(config.MONGODB_URI, config.MONGODB_DB_NAME)
-    logger.info("MongoDB connected")
-    
-    # Connect to Redis cache
-    await RedisCache.connect()
     logger.info("Configuration Service ready on port 8002")
-    
     yield
-    
     logger.info("Shutting down Configuration Service...")
-    await RedisCache.disconnect()
     await close_database_connection()
 
 
 app = FastAPI(
     title="Configuration Service",
-    description="Microservice for AI agent configurations with Redis caching",
+    description="Microservice for AI agent configurations",
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -73,12 +61,7 @@ app.include_router(sip_configs.router, prefix="/sip-configs", tags=["SIP Configs
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    redis_ok = await RedisCache.ping()
-    return {
-        "status": "healthy" if redis_ok else "degraded",
-        "service": "config",
-        "redis": "connected" if redis_ok else "disconnected",
-    }
+    return {"status": "healthy", "service": "config"}
 
 
 @app.get("/")

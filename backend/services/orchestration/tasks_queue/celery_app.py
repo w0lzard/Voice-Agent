@@ -1,54 +1,53 @@
 """
-Celery application configuration.
+Async task runner — Celery/Redis removed.
+Runs background tasks using asyncio.create_task() and tracks their status
+in an in-memory dict. Results are lost on process restart, which is acceptable
+for short-lived campaign executions.
 """
-from celery import Celery
-from shared.redis_config import get_redis_url
+import asyncio
+import logging
+import uuid
+from datetime import datetime, timezone
+from typing import Any, Dict, Optional
 
-# Redis configuration
-REDIS_URL = get_redis_url()
-if not REDIS_URL:
-    raise RuntimeError("Redis is required for Celery but no Redis configuration was found.")
+logger = logging.getLogger("task-runner")
 
-# Create Celery app
-celery_app = Celery(
-    "vobiz_queue",
-    broker=REDIS_URL,
-    backend=REDIS_URL,
-    include=["services.orchestration.tasks_queue.tasks"],
-)
+# In-memory task store: {task_id: {status, result, created_at}}
+_task_store: Dict[str, Dict[str, Any]] = {}
 
-# Celery configuration
-celery_app.conf.update(
-    # Serialization
-    task_serializer="json",
-    accept_content=["json"],
-    result_serializer="json",
-    
-    # Task tracking
-    task_track_started=True,
-    
-    # Reliability
-    task_acks_late=True,  # Acknowledge after task completion
-    task_reject_on_worker_lost=True,  # Re-queue if worker dies
-    
-    # Timeouts
-    task_time_limit=300,  # 5 minutes max per task
-    task_soft_time_limit=270,  # Soft limit before hard kill
-    
-    # Result expiration
-    result_expires=3600,  # Results expire after 1 hour
-    
-    # Worker settings
-    worker_prefetch_multiplier=1,  # Process one task at a time
-    worker_concurrency=4,  # 4 concurrent tasks per worker
-    
-    # Timezone
-    timezone="UTC",
-    enable_utc=True,
-)
 
-# Task routing
-celery_app.conf.task_routes = {
-    "services.orchestration.tasks_queue.tasks.make_single_call": {"queue": "calls"},
-    "services.orchestration.tasks_queue.tasks.execute_campaign": {"queue": "campaigns"},
-}
+def _new_task_id() -> str:
+    return str(uuid.uuid4())
+
+
+def get_task_result(task_id: str) -> Optional[Dict[str, Any]]:
+    """Return stored task info, or None if unknown."""
+    return _task_store.get(task_id)
+
+
+async def _run_and_store(task_id: str, coro) -> None:
+    """Run *coro* and store the outcome in _task_store."""
+    _task_store[task_id] = {
+        "status": "STARTED",
+        "result": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    try:
+        result = await coro
+        _task_store[task_id]["status"] = "SUCCESS"
+        _task_store[task_id]["result"] = result
+        logger.info("Task %s finished: %s", task_id, result)
+    except Exception as exc:
+        _task_store[task_id]["status"] = "FAILURE"
+        _task_store[task_id]["result"] = {"error": str(exc)}
+        logger.error("Task %s failed: %s", task_id, exc)
+
+
+def submit_task(coro) -> str:
+    """
+    Schedule *coro* as an asyncio background task.
+    Returns the task_id so the caller can poll for status.
+    """
+    task_id = _new_task_id()
+    asyncio.create_task(_run_and_store(task_id, coro))
+    return task_id

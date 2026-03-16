@@ -7,54 +7,20 @@ router = APIRouter(prefix="/queue", tags=["Queue"])
 
 @router.get("/health")
 async def queue_health():
-    """
-    Check Celery queue health by triggering a health check task.
-    """
-    try:
-        from tasks_queue.tasks import health_check
-        
-        # Send task to Celery and wait for result (5 second timeout)
-        result = health_check.apply_async()
-        task_result = result.get(timeout=5)
-        
-        return {
-            "status": "healthy",
-            "celery": "connected",
-            "task_id": result.id,
-            "task_result": task_result,
-        }
-    except Exception as e:
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "unhealthy",
-                "celery": "disconnected",
-                "error": str(e),
-            }
-        )
+    """Queue health check — always healthy (asyncio background tasks, no broker)."""
+    return {"status": "healthy", "queue": "asyncio"}
 
 
 @router.get("/stats")
 async def queue_stats():
-    """
-    Get Celery queue statistics.
-    """
+    """Get background task statistics."""
     try:
-        from tasks_queue.celery_app import celery_app
-        
-        # Get registered tasks
-        registered_tasks = list(celery_app.tasks.keys())
-        
-        # Filter out internal Celery tasks
-        our_tasks = [t for t in registered_tasks if t.startswith("tasks_queue")]
-        
-        return {
-            "status": "ok",
-            "registered_tasks": our_tasks,
-            "broker_url": celery_app.conf.broker_url.split("@")[-1] if celery_app.conf.broker_url else None,
-        }
+        from services.orchestration.tasks_queue.celery_app import _task_store
+        total = len(_task_store)
+        by_status: dict = {}
+        for info in _task_store.values():
+            s = info.get("status", "UNKNOWN")
+            by_status[s] = by_status.get(s, 0) + 1
+        return {"status": "ok", "total_tasks": total, "by_status": by_status}
     except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "error": str(e)}
-        )
+        return JSONResponse(status_code=500, content={"status": "error", "error": str(e)})

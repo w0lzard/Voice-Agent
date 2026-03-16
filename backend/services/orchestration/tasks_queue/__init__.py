@@ -1,4 +1,4 @@
-"""Tasks queue package for Celery task management."""
-from .celery_app import celery_app
+"""Tasks queue package."""
+from .celery_app import submit_task, get_task_result
 
-__all__ = ["celery_app"]
+__all__ = ["submit_task", "get_task_result"]

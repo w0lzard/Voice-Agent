@@ -12,7 +12,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from shared.database.connection import get_database
-from config.cache.redis_cache import RedisCache
 
 logger = logging.getLogger("config-service.sip")
 router = APIRouter()
@@ -101,20 +100,12 @@ async def get_default_sip():
 
 @router.get("/{sip_id}")
 async def get_sip_config(sip_id: str):
-    """Get SIP config by ID (from cache first)."""
-    cached = await RedisCache.get_sip(sip_id)
-    if cached:
-        return cached
-    
+    """Get SIP config by ID."""
     db = get_database()
     doc = await db.sip_configs.find_one({"sip_id": sip_id})
-    
     if not doc:
         raise HTTPException(status_code=404, detail="SIP config not found")
-    
     doc.pop("_id", None)
-    await RedisCache.cache_sip(sip_id, doc)
-    
     return doc
 
 
@@ -139,7 +130,6 @@ async def update_sip_config(sip_id: str, request: UpdateSipConfigRequest):
         
         if result:
             result.pop("_id", None)
-            await RedisCache.cache_sip(sip_id, result)
             return {"sip_id": sip_id, "message": "Updated"}
     
     raise HTTPException(status_code=404, detail="SIP config not found")
