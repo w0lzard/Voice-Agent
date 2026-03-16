@@ -945,10 +945,11 @@ async def entrypoint(ctx: agents.JobContext):
 
         async def _send_greeting_and_start_reprompt() -> None:
             nonlocal last_user_speech_at, reprompt_task
-            # Gemini WebSocket may still be establishing when participant_connected fires
-            # (fast calls connect in <3s, Gemini needs ~2-4s). Retry with backoff so the
-            # greeting is delivered as soon as Gemini is ready.
-            _max_attempts = 3
+            # Gemini WebSocket may still be establishing when participant_connected fires.
+            # Give the session a short head-start before the first attempt so we don't
+            # burn an attempt on a guaranteed timeout.
+            await asyncio.sleep(_get_float_env("GREETING_INITIAL_DELAY_SEC", 0.8))
+            _max_attempts = 6
             for _attempt in range(_max_attempts):
                 try:
                     await _speak_scripted_line(session, text=first_message, realtime_audio=realtime_audio)
@@ -957,8 +958,8 @@ async def entrypoint(ctx: agents.JobContext):
                 except Exception as greet_error:
                     _err = str(greet_error).lower()
                     if _attempt < _max_attempts - 1 and ("timed out" in _err or "timeout" in _err):
-                        # Shorter backoff: 0.5s then 1.5s (was 1.5s then 3s)
-                        _wait = 0.5 * (2 ** _attempt)
+                        # Cap backoff at 3s: 0.5, 1.0, 1.5, 2.0, 2.5 (capped)
+                        _wait = min(0.5 * (_attempt + 1), 3.0)
                         logger.warning(
                             "Greeting timed out (model not ready yet), "
                             f"retrying in {_wait:.1f}s... (attempt {_attempt + 1}/{_max_attempts})"
