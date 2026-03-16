@@ -1,5 +1,6 @@
 """Email service — Resend API (primary) or Gmail SMTP (fallback)."""
 import asyncio
+import errno
 import logging
 import smtplib
 import ssl
@@ -167,5 +168,16 @@ async def _send_via_gmail(config, to_email: str, html: str, name: str, otp: str)
             "https://myaccount.google.com/apppasswords — also ensure 2-Step Verification "
             "is ON for your Google account."
         )
+    except OSError as e:
+        if e.errno in (errno.ENETUNREACH, errno.ECONNREFUSED, errno.ETIMEDOUT):
+            raise RuntimeError(
+                "Gmail SMTP is unreachable from this host (Railway blocks outbound SMTP on "
+                "ports 587/465). Use Resend instead: "
+                "1) Create a free account at https://resend.com, "
+                "2) Verify your domain and set EMAIL_FROM=noreply@yourdomain.com, "
+                "3) Set RESEND_API_KEY in your Railway environment variables, "
+                "4) Remove GMAIL_USER and GMAIL_APP_PASSWORD."
+            )
+        raise RuntimeError(f"Gmail SMTP failed: {e}")
     except Exception as e:
         raise RuntimeError(f"Gmail SMTP failed: {e}")
