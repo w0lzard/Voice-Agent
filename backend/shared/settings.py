@@ -97,6 +97,12 @@ class Config:
     RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
     EMAIL_FROM = os.getenv("EMAIL_FROM", "")  # e.g. "AI Agent <noreply@yourdomain.com>"
 
+    # Email — Gmail SMTP fallback (used when RESEND_API_KEY is not set)
+    # Use a Gmail App Password, NOT your regular Gmail password.
+    # Enable at: https://myaccount.google.com/apppasswords
+    GMAIL_USER = os.getenv("GMAIL_USER", "")        # e.g. you@gmail.com
+    GMAIL_APP_PASSWORD = os.getenv("GMAIL_APP_PASSWORD", "")
+
     # Server
     API_HOST = os.getenv("API_HOST", "0.0.0.0")
     API_PORT = int(os.getenv("PORT") or os.getenv("API_PORT", "8000"))
