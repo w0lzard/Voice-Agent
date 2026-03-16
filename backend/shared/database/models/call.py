@@ -73,21 +73,57 @@ class CallRecord(BaseModel):
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "CallRecord":
         """Create from MongoDB document."""
+        data = dict(data)  # don't mutate the original
         if "_id" in data:
             del data["_id"]
-        
-        # Handle transcript format variations
+
+        # Map camelCase legacy fields → snake_case
+        _camel_map = {
+            "callId": "call_id",
+            "workspaceId": "workspace_id",
+            "phoneNumber": "phone_number",
+            "fromNumber": "from_number",
+            "durationSeconds": "duration_seconds",
+            "assistantId": "assistant_id",
+            "sipId": "sip_id",
+            "createdAt": "created_at",
+            "startedAt": "started_at",
+            "answeredAt": "answered_at",
+            "endedAt": "ended_at",
+            "transcriptUrl": "transcript_url",
+            "recordingUrl": "recording_url",
+            "webhookUrl": "webhook_url",
+            "webhookSent": "webhook_sent",
+            "egressId": "egress_id",
+            "roomName": "room_name",
+            "campaignId": None,  # not a field on CallRecord — drop it
+        }
+        for camel, snake in _camel_map.items():
+            if camel in data:
+                val = data.pop(camel)
+                if snake is not None and snake not in data:
+                    data[snake] = val
+
         # Handle transcript format variations
         transcript = data.get("transcript")
-        # Legacy format: {"messages": [...]}
         if isinstance(transcript, dict):
             if "messages" in transcript:
                 data["transcript"] = transcript.get("messages", [])
-            elif "items" in transcript: # Handle items too if it exists
+            elif "items" in transcript:
                 data["transcript"] = transcript.get("items", [])
         elif transcript is None:
-             data["transcript"] = []
-        
+            data["transcript"] = []
+
+        # Provide safe defaults for required fields that may be absent in legacy docs
+        if "call_id" not in data or not data["call_id"]:
+            data["call_id"] = str(data.get("_id", "unknown"))
+        if "phone_number" not in data or not data["phone_number"]:
+            data["phone_number"] = data.get("to", "unknown")
+
+        # Drop unknown extra keys so Pydantic doesn't reject them
+        known = {f for f in cls.model_fields}
+        data = {k: v for k, v in data.items() if k in known}
+
         return cls(**data)
 
 
