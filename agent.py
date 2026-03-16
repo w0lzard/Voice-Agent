@@ -3,9 +3,88 @@ import logging
 import os
 import json
 import time
+import tempfile
 import threading
 from pathlib import Path
 from dotenv import load_dotenv
+
+# ---------------------------------------------------------------------------
+# Concurrent call limiter — cross-process safe via fcntl (Linux/Railway).
+# Falls back to in-process threading.Lock only (sufficient for single-process
+# deployments or Windows dev machines).
+# ---------------------------------------------------------------------------
+try:
+    import fcntl as _fcntl
+    _HAS_FCNTL = True
+except ImportError:
+    _HAS_FCNTL = False  # Windows
+
+_SLOTS_FILE = Path(tempfile.gettempdir()) / "voice_agent_active_calls"
+_slots_thread_lock = threading.Lock()
+
+
+def _get_int_env_early(name: str, default: int) -> int:
+    """Read an int env var before _get_int_env is defined."""
+    try:
+        return int(os.getenv(name, str(default)).strip())
+    except ValueError:
+        return default
+
+
+MAX_CONCURRENT_CALLS: int = _get_int_env_early("MAX_CONCURRENT_CALLS", 3)
+
+
+def _slots_read_write(increment: int) -> tuple[int, bool]:
+    """
+    Atomically read the active-call count, optionally increment it, and write back.
+
+    increment=+1 → try to acquire a slot; returns (new_count, acquired).
+    increment=-1 → release a slot; returns (new_count, True always).
+    increment=0  → read only; returns (count, True always).
+
+    The file stores a plain ASCII integer. fcntl.LOCK_EX provides cross-process
+    atomicity on Linux; the threading.Lock guards in-process races on all platforms.
+    """
+    with _slots_thread_lock:
+        try:
+            f = open(_SLOTS_FILE, "a+b")
+            try:
+                if _HAS_FCNTL:
+                    _fcntl.flock(f, _fcntl.LOCK_EX)
+                f.seek(0)
+                raw = f.read().strip()
+                count = int(raw) if raw else 0
+
+                if increment == 1:
+                    if count >= MAX_CONCURRENT_CALLS:
+                        return count, False
+                    count += 1
+                elif increment == -1:
+                    count = max(0, count - 1)
+
+                f.seek(0)
+                f.truncate()
+                f.write(str(count).encode())
+                f.flush()
+                return count, True
+            finally:
+                f.close()
+        except Exception as exc:
+            logging.getLogger("outbound-agent").warning(
+                "Call slot file error: %s", exc
+            )
+            return 0, True  # fail open: allow call if counter is broken
+
+
+def _try_acquire_call_slot() -> bool:
+    """Return True if a slot was acquired (active calls < MAX_CONCURRENT_CALLS)."""
+    _, acquired = _slots_read_write(+1)
+    return acquired
+
+
+def _release_call_slot() -> None:
+    """Decrement the active-call counter."""
+    _slots_read_write(-1)
 from openai.types.beta.realtime.session import InputAudioTranscription, TurnDetection
 
 # Agent conversation script — edit scripts/agent_script.py to change call flow.
@@ -837,10 +916,48 @@ async def _speak_scripted_line(
     await session.say(text, allow_interruptions=True, add_to_chat_ctx=True)
 
 
+async def _reject_busy_inbound(ctx: agents.JobContext) -> None:
+    """
+    Called when MAX_CONCURRENT_CALLS is reached for an inbound call.
+    Connects to the room, speaks a bilingual wait message, then hangs up.
+    Uses a lightweight non-realtime TTS session to avoid Gemini warmup overhead.
+    """
+    busy_text = (
+        "Namaste! Abhi hamare saare agents busy hain. "
+        "Kripya thodi der baad call karein. Dhanyavaad! "
+        "Hello! All our agents are currently busy. "
+        "Please try calling again in a few minutes. Thank you!"
+    )
+    try:
+        tts = _build_tts()
+        busy_session = AgentSession(
+            stt=_build_stt(),
+            vad=_build_vad(),
+            tts=tts,
+            llm=openai.LLM(model=os.getenv("OPENAI_LLM_MODEL", "gpt-4o-mini")),
+            turn_detection="vad",
+        )
+        await busy_session.start(
+            room=ctx.room,
+            agent=OutboundAssistant(),
+            room_options=RoomOptions(close_on_disconnect=True),
+        )
+        await busy_session.say(busy_text, allow_interruptions=False, add_to_chat_ctx=False)
+        await asyncio.sleep(1.0)  # brief pause so TTS audio flushes before disconnect
+    except Exception as e:
+        logger.warning("Busy-message session failed: %s", e)
+    finally:
+        ctx.shutdown()
+
+
 async def entrypoint(ctx: agents.JobContext):
     """
     Main entrypoint for the agent.
-    
+
+    Enforces MAX_CONCURRENT_CALLS (default 3). A 4th concurrent call:
+    - Inbound: hears a bilingual "all agents busy, please call back" message.
+    - Outbound: job is silently dropped (phone never dialled — no one to notify).
+
     For outbound calls:
     1. Checks for 'phone_number' in the job metadata.
     2. Connects to the room.
@@ -852,7 +969,7 @@ async def entrypoint(ctx: agents.JobContext):
     if not _validate_runtime_provider_keys(_use_realtime_audio()):
         ctx.shutdown()
         return
-    
+
     # parse the phone number from the metadata sent by the dispatch script
     phone_number = None
     try:
@@ -861,6 +978,36 @@ async def entrypoint(ctx: agents.JobContext):
             phone_number = data.get("phone_number")
     except Exception:
         logger.warning("No valid JSON metadata found. This might be an inbound call.")
+
+    # ------------------------------------------------------------------
+    # Concurrent call limit check
+    # ------------------------------------------------------------------
+    if not _try_acquire_call_slot():
+        active, _ = _slots_read_write(0)  # read current count for logging
+        logger.warning(
+            "MAX_CONCURRENT_CALLS=%d reached (%d active). "
+            "%s call rejected.",
+            MAX_CONCURRENT_CALLS,
+            active,
+            "Inbound" if not phone_number else "Outbound",
+        )
+        if phone_number:
+            # Outbound: phone hasn't been dialled yet — nothing to tell the callee.
+            ctx.shutdown()
+            return
+        # Inbound: caller is already on the line — play the busy message.
+        await _reject_busy_inbound(ctx)
+        return
+
+    logger.info(
+        "Call slot acquired (%d/%d active).",
+        _slots_read_write(0)[0],
+        MAX_CONCURRENT_CALLS,
+    )
+
+    # Release slot whenever the LiveKit room disconnects — covers all exit paths:
+    # normal hangup, SIP reject, exception, ctx.shutdown(), etc.
+    ctx.room.on("disconnected", lambda *_: _release_call_slot())
 
     # Initialize function context
     fnc_ctx = TransferFunctions(ctx, phone_number)
@@ -1164,7 +1311,10 @@ if __name__ == "__main__":
         agents.WorkerOptions(
             entrypoint_fnc=entrypoint,
             prewarm_fnc=prewarm,
-            agent_name="outbound-caller", 
+            agent_name="outbound-caller",
             num_idle_processes=max(0, _get_int_env("AGENT_NUM_IDLE_PROCESSES", 1)),
+            # Hard cap at LiveKit worker level — our entrypoint enforces the same
+            # limit in-process and plays a "busy" message for inbound overflow calls.
+            max_concurrent_jobs=MAX_CONCURRENT_CALLS,
         )
     )
