@@ -120,6 +120,22 @@ class CallRecord(BaseModel):
         if "phone_number" not in data or not data["phone_number"]:
             data["phone_number"] = data.get("to", "unknown")
 
+        # Normalise legacy/unknown status values so Pydantic doesn't reject them.
+        _status_map = {
+            "queued":      CallStatus.INITIATED,
+            "in-progress": CallStatus.ANSWERED,
+            "in_progress": CallStatus.ANSWERED,
+            "busy":        CallStatus.FAILED,
+            "canceled":    CallStatus.FAILED,
+            "cancelled":   CallStatus.FAILED,
+            "no-answer":   CallStatus.NO_ANSWER,
+        }
+        raw_status = data.get("status")
+        if isinstance(raw_status, str):
+            known_values = {s.value for s in CallStatus}
+            if raw_status not in known_values:
+                data["status"] = _status_map.get(raw_status, CallStatus.FAILED)
+
         # Drop unknown extra keys so Pydantic doesn't reject them
         known = {f for f in cls.model_fields}
         data = {k: v for k, v in data.items() if k in known}

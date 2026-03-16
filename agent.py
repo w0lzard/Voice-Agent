@@ -1094,9 +1094,16 @@ async def entrypoint(ctx: agents.JobContext):
         return None
 
     resolved_trunk_id = await _start_session_and_resolve_trunk()
-    # Timestamp when session.start() + trunk resolution both completed.
-    # Used to compute how much longer Gemini needs before it accepts generate_reply.
     _session_ready_at = time.time()
+
+    # session.start() causes Gemini to auto-trigger _realtime_reply_task immediately
+    # (it sees a system prompt and assumes it should speak). That auto-task times out
+    # and permanently corrupts the generation tracker. Cancel it right away.
+    if _use_realtime_audio():
+        try:
+            session.interrupt()
+        except Exception:
+            pass
 
     @session.on("user_input_transcribed")
     def _on_user_input_transcribed(ev) -> None:
@@ -1218,22 +1225,39 @@ async def entrypoint(ctx: agents.JobContext):
                 "Greeting delay: %.1fs (warmup=%.0fs, elapsed_since_entrypoint=%.1fs)",
                 delay, warmup_sec, elapsed,
             )
-            try:
-                await asyncio.wait_for(_call_failed.wait(), timeout=delay)
-                logger.info("Greeting aborted: SIP call failed before warmup elapsed.")
-                return
-            except asyncio.TimeoutError:
-                pass  # Normal path: warmup elapsed, call still in progress
+
+            # During warmup: interrupt Gemini every 2s to cancel any auto-generated turns.
+            # Gemini sees the system prompt at session.start() and immediately tries to
+            # speak. Each auto-triggered _realtime_reply_task that times out corrupts the
+            # generation tracker permanently. Periodic interrupts keep state clean until
+            # we are ready to send the greeting ourselves.
+            warmup_remaining = delay
+            while warmup_remaining > 0:
+                if _call_failed.is_set():
+                    logger.info("Greeting aborted: SIP call failed during warmup.")
+                    return
+                if realtime_audio:
+                    try:
+                        session.interrupt()
+                    except Exception:
+                        pass
+                sleep_for = min(2.0, warmup_remaining)
+                try:
+                    await asyncio.wait_for(_call_failed.wait(), timeout=sleep_for)
+                    logger.info("Greeting aborted: SIP call failed during warmup.")
+                    return
+                except asyncio.TimeoutError:
+                    warmup_remaining -= sleep_for
+
             if _call_failed.is_set():
                 return
 
-            # Flush any stale Gemini content from the warmup period (Fix B).
-            # Without this, proactive Gemini responses land during our generate_reply
-            # window and corrupt the generation tracker → permanent agent silence.
+            # Final interrupt + brief settle before our greeting generate_reply.
+            # Ensures no stale Gemini response is in-flight when we send the greeting.
             if realtime_audio:
                 try:
                     session.interrupt()
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(0.5)
                 except Exception:
                     pass
             if _call_failed.is_set():
