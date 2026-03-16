@@ -74,7 +74,15 @@ export function AuthProvider({ children }) {
 
     const isPublicRoute = PUBLIC_ROUTES.includes(normalizedPath);
 
-    if (loading) {
+    // Run redirects in an effect (never during render)
+    useEffect(() => {
+        if (loading) return;
+        if (!user && !isPublicRoute) router.replace('/login');
+        else if (user && isPublicRoute) router.replace('/');
+    }, [loading, user, normalizedPath]);
+
+    // Show loading screen until auth is resolved AND any redirect has navigated away
+    if (loading || (!user && !isPublicRoute) || (user && isPublicRoute)) {
         return (
             <AuthContext.Provider value={{ user, token, login, logout, loading }}>
                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh', background: '#101622', color: '#9ca3af' }}>
@@ -82,18 +90,6 @@ export function AuthProvider({ children }) {
                 </div>
             </AuthContext.Provider>
         );
-    }
-
-    // Redirect unauthenticated users to login
-    if (!user && !isPublicRoute) {
-        router.replace('/login');
-        return null;
-    }
-
-    // Redirect authenticated users away from auth pages
-    if (user && isPublicRoute) {
-        router.replace('/');
-        return null;
     }
 
     return (
