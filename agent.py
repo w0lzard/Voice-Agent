@@ -916,11 +916,9 @@ async def _speak_scripted_line(
 
     Pipeline (STT → LLM → TTS): uses session.say() to bypass the LLM.
 
-    allow_interruptions=False for the opening greeting prevents user speech from
-    interrupting mid-sentence.  An interruption during generate_reply corrupts
-    Gemini Live's turn-detection state machine, causing permanent silence.
-    Gemini still receives user audio while the greeting plays; it queues the
-    response and delivers it naturally once the greeting finishes.
+    Note: allow_interruptions=False is silently ignored by livekit-agents when
+    using server-side turn detection (Gemini Live).  Only effective for pipeline
+    mode via session.say().
     """
     if realtime_audio:
         reply_kwargs: dict = {
@@ -1359,39 +1357,49 @@ async def entrypoint(ctx: agents.JobContext):
             if _call_failed.is_set():
                 return
 
-            # Only interrupt if the user has NOT spoken yet.
-            # If user already spoke, Gemini is mid-generation for that speech —
-            # interrupting it would kill that natural response and corrupt session state.
-            if realtime_audio and not user_spoke_before_greeting:
-                try:
-                    session.interrupt()
-                    await asyncio.sleep(0.3)
-                except Exception:
-                    pass
-
             if _call_failed.is_set():
                 return
 
-            # Fire greeting. One retry on transient failure.
-            for _attempt in range(2):
-                if _call_failed.is_set():
-                    logger.info("Greeting aborted mid-retry: SIP call failed.")
-                    return
-                try:
-                    await _speak_scripted_line(
-                        session,
-                        text=first_message,
-                        realtime_audio=realtime_audio,
-                        allow_interruptions=False,  # greeting must play to completion
-                    )
-                    logger.info("Initial greeting sent.")
-                    break
-                except asyncio.CancelledError:
-                    raise
-                except Exception as greet_error:
-                    logger.warning("Greeting attempt %d failed: %s", _attempt + 1, greet_error)
-                    if _attempt == 0:
-                        await asyncio.sleep(1.5)
+            if user_spoke_before_greeting:
+                # User spoke before the greeting window elapsed.
+                # Gemini's server-side turn detection already started a natural
+                # response to their speech.  Calling generate_reply() here would
+                # race with that in-progress generation, time out after 5 s, and
+                # permanently corrupt Gemini's turn-detection state machine.
+                # → Skip the scripted greeting entirely; Gemini handles it.
+                logger.info(
+                    "User spoke before greeting — letting Gemini respond naturally."
+                )
+            else:
+                # Interrupt any auto-generated warmup turn before we speak.
+                if realtime_audio:
+                    try:
+                        session.interrupt()
+                        await asyncio.sleep(0.3)
+                    except Exception:
+                        pass
+
+                # Fire greeting. One retry on transient failure.
+                for _attempt in range(2):
+                    if _call_failed.is_set():
+                        logger.info("Greeting aborted mid-retry: SIP call failed.")
+                        return
+                    try:
+                        await _speak_scripted_line(
+                            session,
+                            text=first_message,
+                            realtime_audio=realtime_audio,
+                        )
+                        logger.info("Initial greeting sent.")
+                        break
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as greet_error:
+                        logger.warning(
+                            "Greeting attempt %d failed: %s", _attempt + 1, greet_error
+                        )
+                        if _attempt == 0:
+                            await asyncio.sleep(1.5)
 
             # Reset silence timer so reprompt is measured from greeting end.
             last_user_speech_at = time.time()
