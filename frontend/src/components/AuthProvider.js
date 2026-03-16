@@ -6,7 +6,7 @@ import { API_BASE } from '../lib/api';
 
 const AuthContext = createContext(null);
 
-const PUBLIC_ROUTES = ['/login', '/signup', '/verify'];
+const PUBLIC_ROUTES = ['/login', '/signup', '/verify', '/verify-phone'];
 const normalizePath = (path = '') => {
     if (!path) return '/';
     return path.length > 1 ? path.replace(/\/+$/, '') : path;
@@ -82,6 +82,18 @@ export function AuthProvider({ children }) {
                 </div>
             </AuthContext.Provider>
         );
+    }
+
+    // Redirect unauthenticated users to login
+    if (!user && !isPublicRoute) {
+        router.replace('/login');
+        return null;
+    }
+
+    // Redirect authenticated users away from auth pages
+    if (user && isPublicRoute) {
+        router.replace('/');
+        return null;
     }
 
     return (
