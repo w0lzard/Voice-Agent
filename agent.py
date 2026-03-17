@@ -645,24 +645,13 @@ def _build_realtime_llm():
         )
         extra_kwargs: dict = {}
         if _HAS_GOOGLE_GENAI_TYPES:
-            # DISABLED server-side auto-activity detection — the livekit client VAD
-            # sends explicit activityStart/activityEnd signals instead.
-            #
-            # Why disabled=True:
-            #   With server-side detection ON, Gemini auto-generates the moment it
-            #   hears ANY audio (carrier announcement, background noise, anything).
-            #   Those autonomous generations race with generate_reply() calls — the
-            #   livekit SDK waits for a generation_created event but the auto-
-            #   generation already sent serverContent without one, so generate_reply
-            #   times out and permanently corrupts the session state.
-            #
-            #   With disabled=True, Gemini only speaks when:
-            #     (a) client VAD sends activityStart → end → Gemini responds naturally
-            #     (b) our code explicitly calls generate_reply() (greeting)
-            #   Both paths are race-free.
+            # Use Gemini's server-side activity detection (disabled=False is default).
+            # Gemini auto-generates naturally when the caller speaks — race-free because
+            # the greeting uses session.say() which calls interrupt() internally before
+            # playing TTS, so no generate_reply() races with auto-generated turns.
             extra_kwargs["realtime_input_config"] = google_genai_types.RealtimeInputConfig(
                 automatic_activity_detection=google_genai_types.AutomaticActivityDetection(
-                    disabled=True,
+                    disabled=False,
                 ),
                 # START_OF_ACTIVITY_INTERRUPTS: caller can cut in mid-sentence.
                 activity_handling=google_genai_types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
@@ -927,35 +916,15 @@ async def _speak_scripted_line(
     session: AgentSession,
     *,
     text: str,
-    realtime_audio: bool,
     allow_interruptions: bool = True,
 ) -> None:
-    """Play a scripted line.
+    """Play a scripted line via TTS (session.say) for all modes.
 
-    Realtime (Gemini Live / OpenAI Realtime): uses generate_reply() with a
-    natural-language instruction so the realtime model speaks in its native
-    voice without going through a separate TTS provider.
-
-    Pipeline (STT → LLM → TTS): uses session.say() to bypass the LLM.
-
-    Note: allow_interruptions=False is silently ignored by livekit-agents when
-    using server-side turn detection (Gemini Live).  Only effective for pipeline
-    mode via session.say().
+    session.say() internally calls interrupt() before speaking, making it
+    completely race-free against Gemini's server-side auto-generated turns.
+    No generate_reply() is used here — that avoids the generation_created
+    race condition that caused 5s timeouts and session corruption.
     """
-    if realtime_audio:
-        reply_kwargs: dict = {
-            "instructions": (
-                f"This is the opening of the call — NOT a reply to the user. "
-                f"Deliver this greeting naturally without any leading filler word: {text}"
-            ),
-            "allow_interruptions": allow_interruptions,
-            "input_modality": "text",
-        }
-        if _get_realtime_provider() != "google":
-            reply_kwargs["tool_choice"] = "none"
-        await session.generate_reply(**reply_kwargs)
-        return
-
     await session.say(text, allow_interruptions=allow_interruptions, add_to_chat_ctx=True)
 
 
@@ -1075,17 +1044,15 @@ async def entrypoint(ctx: agents.JobContext):
 
     # Initialize the Agent Session with plugins
     if realtime_audio:
-        # Client-side VAD for Gemini Live.
-        # Gemini's server-side automatic activity detection is disabled in
-        # _build_realtime_llm() so it won't auto-generate when it hears audio.
-        # The livekit framework reads this VAD and sends activityStart/End to
-        # Gemini, giving us deterministic control over when Gemini speaks.
-        realtime_vad = ctx.proc.userdata.get("vad") or _build_vad()
+        # Gemini Live: server-side turn detection via "realtime_llm".
+        # No client-side VAD (vad=) — adding PyTorch/Silero VAD to a Gemini session
+        # causes full model inference on every audio frame and OOMs Railway containers.
+        # TTS is added so session.say() works for the scripted greeting.
         session = AgentSession(
             llm=_build_realtime_llm(),
-            vad=realtime_vad,
+            tts=_build_tts(),
             tools=fnc_ctx.flatten(),
-            # No turn_detection="realtime_llm" — client VAD drives turn detection.
+            turn_detection="realtime_llm",
             allow_interruptions=True,
             min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.10),
             max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.30),
@@ -1268,7 +1235,6 @@ async def entrypoint(ctx: agents.JobContext):
                 await _speak_scripted_line(
                     session,
                     text=reprompt_text,
-                    realtime_audio=realtime_audio,
                 )
                 logger.info("No user speech detected; reprompt sent.")
                 break
@@ -1445,15 +1411,9 @@ async def entrypoint(ctx: agents.JobContext):
                     "User spoke before greeting — letting Gemini respond naturally."
                 )
             else:
-                # Interrupt any auto-generated warmup turn before we speak.
-                if realtime_audio:
-                    try:
-                        session.interrupt()
-                        await asyncio.sleep(0.3)
-                    except Exception:
-                        pass
-
                 # Fire greeting. One retry on transient failure.
+                # session.say() internally calls interrupt() before speaking,
+                # so no separate interrupt() call is needed here.
                 for _attempt in range(2):
                     if _call_failed.is_set():
                         logger.info("Greeting aborted mid-retry: SIP call failed.")
@@ -1462,7 +1422,6 @@ async def entrypoint(ctx: agents.JobContext):
                         await _speak_scripted_line(
                             session,
                             text=first_message,
-                            realtime_audio=realtime_audio,
                         )
                         logger.info("Initial greeting sent.")
                         break
@@ -1529,7 +1488,7 @@ async def entrypoint(ctx: agents.JobContext):
     else:
         # Inbound / web call
         logger.info("No phone number in metadata. Treating as inbound/web call.")
-        await _speak_scripted_line(session, text=inbound_greeting, realtime_audio=realtime_audio)
+        await _speak_scripted_line(session, text=inbound_greeting)
 
 
 if __name__ == "__main__":
