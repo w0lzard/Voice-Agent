@@ -970,6 +970,12 @@ async def entrypoint(ctx: agents.JobContext):
     # The greeting loop uses this to dynamically shorten the carrier wait when the
     # announcement arrives early, reducing unnecessary silence for the caller.
     _carrier_detected_at: list[float] = [0.0]
+    # Set True on a NON-FINAL transcript in expected script (Hindi/Latin) that is
+    # not a noise token or carrier phrase.  Used by the greeting task to detect
+    # "user is already speaking" before the FINAL transcript arrives, so we can
+    # skip the scripted greeting and let Gemini respond naturally — saving the
+    # ~4-8 s of generate_reply latency when user speaks during the carrier window.
+    _user_started_speaking: list[bool] = [False]
     reprompt_task: asyncio.Task | None = None
 
     # Initialize Gemini Live session.
@@ -1063,11 +1069,12 @@ async def entrypoint(ctx: agents.JobContext):
             # disrupts Gemini's server-side VAD state and causes generation timeouts.
             return
 
-        # Only count the utterance as real user speech once the STT has produced
-        # a final (committed) transcript.  Non-final partials like "Thi", "This",
-        # "This call" would falsely trigger user_spoke_before_greeting before the
-        # carrier filter has enough text to recognise the full announcement phrase.
+        # Non-final transcript in expected script (Hindi/Latin) — NOT noise,
+        # NOT a carrier phrase.  Flag it so the greeting task can skip the
+        # scripted greeting and let Gemini respond naturally, saving the
+        # ~4-8 s generate_reply latency when the user speaks early.
         if not getattr(ev, "is_final", False):
+            _user_started_speaking[0] = True
             return
         last_user_speech_at = time.time()
         if reprompt_task and not reprompt_task.done():
@@ -1272,7 +1279,10 @@ async def entrypoint(ctx: agents.JobContext):
                     dynamic_done = _carrier_detected_at[0] + carrier_tail
                     carrier_done_at = min(carrier_done_at, dynamic_done)
 
-                user_spoke_before_greeting = last_user_speech_at > answered_at
+                user_spoke_before_greeting = (
+                    last_user_speech_at > answered_at  # final transcript
+                    or _user_started_speaking[0]        # non-final expected-script speech
+                )
                 if user_spoke_before_greeting:   # skip carrier wait — user is live
                     logger.debug("User spoke during carrier wait — firing greeting immediately.")
                     break
