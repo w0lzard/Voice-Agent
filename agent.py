@@ -351,6 +351,10 @@ def _is_stt_noise_token(text: str) -> bool:
             cp <= 0x024F              # Latin, Latin-1 Supplement, Latin Extended
             or 0x0900 <= cp <= 0x097F  # Devanagari
         )
+    # Case 3: no alphanumeric characters at all — punctuation/symbol-only
+    # strings like ".", "...", "!" are carrier line artifacts, not speech.
+    if not any(c.isalnum() for c in stripped):
+        return True
     alpha_chars = [c for c in stripped if c.isalpha()]
     if alpha_chars and all(not _is_expected_alpha(c) for c in alpha_chars):
         return True
@@ -1188,20 +1192,12 @@ async def entrypoint(ctx: agents.JobContext):
                         )
                         _last_agent_response_at[0] = now  # prevent re-trigger while recovering
                         try:
-                            # Interrupt to clear any stuck Gemini state, then generate_reply.
-                            session.interrupt()
-                            await asyncio.sleep(1.5)
                             await session.generate_reply(
                                 instructions="Respond naturally to what the user just said.",
                                 allow_interruptions=True,
                             )
                         except Exception as wd_err:
                             logger.debug("Watchdog generate_reply failed: %s", wd_err)
-                            # Last resort: interrupt to reset Gemini VAD state
-                            try:
-                                session.interrupt()
-                            except Exception:
-                                pass
             except asyncio.CancelledError:
                 pass
 
