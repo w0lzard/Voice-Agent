@@ -319,19 +319,42 @@ def _is_carrier_announcement(text: str) -> bool:
 
 
 def _is_stt_noise_token(text: str) -> bool:
-    """Return True for STT artifact tokens like <noise>, <crosstalk>, etc.
+    """Return True for STT artifact tokens that are carrier/telephony noise.
 
-    These are emitted by the speech-recognition engine to indicate non-speech
-    audio events (background noise, music, laughter).  They are NOT real user
-    utterances and must not reset the silence timer or trigger the watchdog.
+    Covers two cases:
+      1. Literal markers: <noise>, <crosstalk>, etc.
+      2. Multilingual garbage: carrier line noise is often transcribed as
+         random short words in Cyrillic, Arabic, Malayalam, etc.  If EVERY
+         alphabetic character in the transcript is outside the expected
+         Latin + Devanagari ranges, treat the whole token as noise.
+
+    Expected scripts for hi-IN / en-IN calls:
+      - Latin / Latin Extended: U+0000–U+024F  (English, Hinglish)
+      - Devanagari: U+0900–U+097F              (Hindi script)
     """
     stripped = text.strip()
-    return (
+    if not stripped:
+        return True
+    # Case 1: literal noise markers like <noise>, <crosstalk>
+    if (
         stripped.startswith("<")
         and stripped.endswith(">")
         and len(stripped) <= 30
-        and " " not in stripped  # multi-word phrases are real speech
-    )
+        and " " not in stripped
+    ):
+        return True
+    # Case 2: detect transcripts where every alphabetic character is in an
+    # unexpected Unicode block — these are carrier audio artefacts.
+    def _is_expected_alpha(c: str) -> bool:
+        cp = ord(c)
+        return (
+            cp <= 0x024F              # Latin, Latin-1 Supplement, Latin Extended
+            or 0x0900 <= cp <= 0x097F  # Devanagari
+        )
+    alpha_chars = [c for c in stripped if c.isalpha()]
+    if alpha_chars and all(not _is_expected_alpha(c) for c in alpha_chars):
+        return True
+    return False
 
 
 def _safe_log_text(value: str, limit: int = 200) -> str:
