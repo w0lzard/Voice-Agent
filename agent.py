@@ -315,7 +315,14 @@ _CARRIER_PHRASES: frozenset[str] = frozenset([
 
 def _is_carrier_announcement(text: str) -> bool:
     lower = text.lower().strip()
-    return any(phrase in lower for phrase in _CARRIER_PHRASES)
+    # Full match: text contains a complete carrier phrase
+    if any(phrase in lower for phrase in _CARRIER_PHRASES):
+        return True
+    # Prefix match: text is the beginning of a known carrier phrase
+    # e.g. "This" is a prefix of "this call is now being recorded"
+    if any(phrase.startswith(lower + " ") for phrase in _CARRIER_PHRASES):
+        return True
+    return False
 
 
 def _is_stt_noise_token(text: str) -> bool:
@@ -1117,28 +1124,44 @@ async def entrypoint(ctx: agents.JobContext):
                 _last_agent_response_at[0] = time.time()
 
     async def _reprompt_if_no_speech() -> None:
-        """If caller stays silent/no transcript arrives, send a short reprompt.
+        """Send up to 2 reprompts if the caller stays silent after the greeting.
 
-        Default delay is 12s — long enough for the greeting audio to finish
-        playing and for the user to respond, preventing the reprompt from
-        racing with the greeting and corrupting Gemini session state.
+        Reprompt 1: fires NO_SPEECH_REPROMPT_SEC (default 7s) after greeting.
+        Reprompt 2: fires 10s after reprompt 1 if still no real speech — uses
+                    a simpler "Can you hear me?" prompt before giving up.
         """
         delay = _get_float_env("NO_SPEECH_REPROMPT_SEC", 7.0)
-        reprompt_text = _default_reprompt(_get_default_language())
+        lang = _get_default_language()
+        reprompt_text = _default_reprompt(lang)
+        reprompt2_text = (
+            "Kya aap mujhe sun pa rahe hain? Kripya kuch boliye."
+            if lang == "hi"
+            else "Can you hear me? Please say something."
+        )
         try:
+            # --- Reprompt 1 ---
             while True:
                 await asyncio.sleep(1.0)
                 if time.time() - last_user_speech_at < delay:
                     continue
-                # Re-check: user may have spoken while we were sleeping.
                 if time.time() - last_user_speech_at < 1.5:
-                    break
-                await _speak_scripted_line(
-                    session,
-                    text=reprompt_text,
-                )
-                logger.info("No user speech detected; reprompt sent.")
+                    return  # user just spoke — cancel
+                await _speak_scripted_line(session, text=reprompt_text)
+                logger.info("No user speech detected; reprompt 1 sent.")
                 break
+
+            # --- Reprompt 2 (10s after reprompt 1) ---
+            reprompt1_at = time.time()
+            while True:
+                await asyncio.sleep(1.0)
+                if last_user_speech_at > reprompt1_at:
+                    return  # user responded after reprompt 1 — done
+                if time.time() - reprompt1_at < 10.0:
+                    continue
+                await _speak_scripted_line(session, text=reprompt2_text)
+                logger.info("No user speech detected; reprompt 2 sent.")
+                break
+
         except asyncio.CancelledError:
             logger.debug("No-speech reprompt cancelled because user spoke.")
         except Exception as reprompt_error:
