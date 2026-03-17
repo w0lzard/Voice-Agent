@@ -1277,11 +1277,12 @@ async def entrypoint(ctx: agents.JobContext):
             # is safe.  With auto-activity disabled, Gemini does NOT auto-generate at
             # session.start(), so we only need time for the WebSocket connection to
             # fully establish — 3 s is sufficient.
-            warmup_sec = _get_float_env("GEMINI_SESSION_WARMUP_SEC", 6.0)
-            # CARRIER_ANNOUNCEMENT_WAIT_SEC: maximum time after call-answer to wait
-            # for the telephony carrier announcement to finish.  Used as a fallback
-            # if the announcement is never detected via STT.
-            carrier_wait = _get_float_env("CARRIER_ANNOUNCEMENT_WAIT_SEC", 7.0)
+            warmup_sec = _get_float_env("GEMINI_SESSION_WARMUP_SEC", 3.0)
+            # CARRIER_ANNOUNCEMENT_WAIT_SEC: baseline wait after call-answer before
+            # firing the greeting.  The dynamic max() logic extends this whenever
+            # carrier audio is detected, so 3 s is a safe baseline for the no-carrier
+            # case without adding unnecessary latency.
+            carrier_wait = _get_float_env("CARRIER_ANNOUNCEMENT_WAIT_SEC", 3.0)
             # After the LAST carrier / noise event, wait this many seconds before
             # greeting.  Gemini processes carrier-as-user-turn in <100ms, so 0.8s
             # is enough safety margin without adding noticeable latency.
