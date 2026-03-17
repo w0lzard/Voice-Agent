@@ -7,9 +7,13 @@ import { API_BASE } from '../../lib/api';
 
 export default function SignupPage() {
     const router = useRouter();
+    const [tab, setTab] = useState('email'); // 'email' | 'phone'
+
     const [name, setName] = useState('');
     const [email, setEmail] = useState('');
+    const [phone, setPhone] = useState('');
     const [password, setPassword] = useState('');
+
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
@@ -18,17 +22,18 @@ export default function SignupPage() {
         setError('');
         setLoading(true);
 
-        // debug info
-        console.debug('Signup page - API_BASE =', API_BASE);
-        console.debug('signup payload', { name, email, password });
-
         try {
             const url = `${API_BASE}/v1/auth/signup`;
-            console.debug('fetching', url);
+
+            const payload =
+                tab === 'email'
+                    ? { name, email, password }
+                    : { name, phone, password };
+
             const res = await fetch(url, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ name, email, password })
+                body: JSON.stringify(payload)
             });
 
             const data = await res.json();
@@ -38,10 +43,17 @@ export default function SignupPage() {
                 return;
             }
 
-            // Redirect to email verification (include devOtp if backend provided it)
-            const verifyUrl = `/verify?email=${encodeURIComponent(email)}` +
-                (data.devOtp ? `&devOtp=${encodeURIComponent(data.devOtp)}` : '');
-            router.push(verifyUrl);
+            if (tab === 'email') {
+                const verifyUrl =
+                    `/verify?email=${encodeURIComponent(email)}` +
+                    (data.devOtp ? `&devOtp=${encodeURIComponent(data.devOtp)}` : '');
+                router.push(verifyUrl);
+            } else {
+                const verifyUrl =
+                    `/verify-phone?phone=${encodeURIComponent(phone)}` +
+                    (data.devOtp ? `&devOtp=${encodeURIComponent(data.devOtp)}` : '');
+                router.push(verifyUrl);
+            }
         } catch {
             setError('Network error. Please make sure the backend is running.');
         } finally {
@@ -57,13 +69,84 @@ export default function SignupPage() {
         <div className="auth-page">
             <div className="auth-card">
                 <div className="auth-logo">
-                    <div style={{width: 48, height: 48, borderRadius: 14, background: '#2b6cee', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 20px rgba(43,108,238,0.4)'}}>
-                        <span className="material-symbols-outlined" style={{color: 'white', fontSize: 24}}>graphic_eq</span>
+                    <div
+                        style={{
+                            width: 48,
+                            height: 48,
+                            borderRadius: 14,
+                            background: '#2b6cee',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            boxShadow: '0 0 20px rgba(43,108,238,0.4)'
+                        }}
+                    >
+                        <span
+                            className="material-symbols-outlined"
+                            style={{ color: 'white', fontSize: 24 }}
+                        >
+                            graphic_eq
+                        </span>
                     </div>
                 </div>
 
                 <h1 className="auth-title">Create Account</h1>
                 <p className="auth-subtitle">Get started with VoiceAI Platform</p>
+
+                <div
+                    style={{
+                        display: 'flex',
+                        gap: 6,
+                        marginBottom: 20,
+                        background: 'rgba(255,255,255,0.05)',
+                        borderRadius: 10,
+                        padding: 4
+                    }}
+                >
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setTab('email');
+                            setError('');
+                        }}
+                        style={{
+                            flex: 1,
+                            padding: '8px 0',
+                            borderRadius: 7,
+                            border: 'none',
+                            cursor: 'pointer',
+                            fontSize: 13,
+                            fontWeight: 600,
+                            background: tab === 'email' ? '#2b6cee' : 'transparent',
+                            color: tab === 'email' ? '#fff' : '#6b7280',
+                            transition: 'all 0.15s'
+                        }}
+                    >
+                        Email
+                    </button>
+
+                    <button
+                        type="button"
+                        onClick={() => {
+                            setTab('phone');
+                            setError('');
+                        }}
+                        style={{
+                            flex: 1,
+                            padding: '8px 0',
+                            borderRadius: 7,
+                            border: 'none',
+                            cursor: 'pointer',
+                            fontSize: 13,
+                            fontWeight: 600,
+                            background: tab === 'phone' ? '#2b6cee' : 'transparent',
+                            color: tab === 'phone' ? '#fff' : '#6b7280',
+                            transition: 'all 0.15s'
+                        }}
+                    >
+                        Phone Number
+                    </button>
+                </div>
 
                 {error && <div className="auth-error">{error}</div>}
 
@@ -79,16 +162,29 @@ export default function SignupPage() {
                         />
                     </div>
 
-                    <div className="form-group">
-                        <label>Email</label>
-                        <input
-                            type="email"
-                            placeholder="you@company.com"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            required
-                        />
-                    </div>
+                    {tab === 'email' ? (
+                        <div className="form-group">
+                            <label>Email</label>
+                            <input
+                                type="email"
+                                placeholder="you@company.com"
+                                value={email}
+                                onChange={(e) => setEmail(e.target.value)}
+                                required
+                            />
+                        </div>
+                    ) : (
+                        <div className="form-group">
+                            <label>Phone Number</label>
+                            <input
+                                type="tel"
+                                placeholder="+91 98765 43210"
+                                value={phone}
+                                onChange={(e) => setPhone(e.target.value)}
+                                required
+                            />
+                        </div>
+                    )}
 
                     <div className="form-group">
                         <label>Password</label>

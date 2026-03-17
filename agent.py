@@ -289,8 +289,8 @@ def _default_first_message(agent_name: str, company: str, language: str) -> str:
 
 def _default_reprompt(language: str) -> str:
     if language == "hi":
-        return "Hello? Kya aap wahan hain? Kya aap mujhe sun pa rahe hain?"
-    return "Hello? Are you still there? Can you hear me?"
+        return "Namaste, kya abhi baat karna theek rahega?"
+    return "Hello, is this a good time to talk?"
 
 
 # Carrier auto-announcement phrases spoken by the telephony provider — NOT real user
@@ -319,46 +319,19 @@ def _is_carrier_announcement(text: str) -> bool:
 
 
 def _is_stt_noise_token(text: str) -> bool:
-    """Return True for STT artifact tokens that are carrier/telephony noise.
+    """Return True for STT artifact tokens like <noise>, <crosstalk>, etc.
 
-    Covers two cases:
-      1. Literal markers: <noise>, <crosstalk>, etc.
-      2. Multilingual garbage: carrier line noise is often transcribed as
-         random short words in Cyrillic, Arabic, Malayalam, etc.  If EVERY
-         alphabetic character in the transcript is outside the expected
-         Latin + Devanagari ranges, treat the whole token as noise.
-
-    Expected scripts for hi-IN / en-IN calls:
-      - Latin / Latin Extended: U+0000–U+024F  (English, Hinglish)
-      - Devanagari: U+0900–U+097F              (Hindi script)
+    These are emitted by the speech-recognition engine to indicate non-speech
+    audio events (background noise, music, laughter).  They are NOT real user
+    utterances and must not reset the silence timer or trigger the watchdog.
     """
     stripped = text.strip()
-    if not stripped:
-        return True
-    # Case 1: literal noise markers like <noise>, <crosstalk>
-    if (
+    return (
         stripped.startswith("<")
         and stripped.endswith(">")
         and len(stripped) <= 30
-        and " " not in stripped
-    ):
-        return True
-    # Case 2: detect transcripts where every alphabetic character is in an
-    # unexpected Unicode block — these are carrier audio artefacts.
-    def _is_expected_alpha(c: str) -> bool:
-        cp = ord(c)
-        return (
-            cp <= 0x024F              # Latin, Latin-1 Supplement, Latin Extended
-            or 0x0900 <= cp <= 0x097F  # Devanagari
-        )
-    # Case 3: no alphanumeric characters at all — punctuation/symbol-only
-    # strings like ".", "...", "!" are carrier line artifacts, not speech.
-    if not any(c.isalnum() for c in stripped):
-        return True
-    alpha_chars = [c for c in stripped if c.isalpha()]
-    if alpha_chars and all(not _is_expected_alpha(c) for c in alpha_chars):
-        return True
-    return False
+        and " " not in stripped  # multi-word phrases are real speech
+    )
 
 
 def _safe_log_text(value: str, limit: int = 200) -> str:
@@ -577,12 +550,7 @@ def _build_realtime_llm():
             automatic_activity_detection=google_genai_types.AutomaticActivityDetection(
                 disabled=False,
             ),
-            # NO_INTERRUPTION: agent always finishes its full sentence before
-            # processing new input.  START_OF_ACTIVITY_INTERRUPTS causes
-            # telephony carrier noise to cut off the agent mid-sentence,
-            # producing confusing fragments like "sakte hain?" or "kind of
-            # property are you looking for?" instead of complete questions.
-            activity_handling=google_genai_types.ActivityHandling.NO_INTERRUPTION,
+            activity_handling=google_genai_types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
         )
         extra_kwargs["input_audio_transcription"] = google_genai_types.AudioTranscriptionConfig()
         extra_kwargs["enable_affective_dialog"] = True
@@ -801,12 +769,12 @@ async def _speak_scripted_line(
     We use generate_reply() with an explicit instruction so Gemini speaks
     the line in its own voice — no separate TTS provider required.
 
-    IMPORTANT: Do NOT call session.interrupt() before generate_reply().
-    interrupt() corrupts Gemini Live's internal state machine: the next
-    generate_reply always times out (5 s) and Gemini then generates its own
-    natural response (e.g. "Haan") instead of following our "Say exactly:"
-    instruction.  Without interrupt(), generate_reply() queues behind any
-    in-progress Gemini auto-generation and fires correctly once Gemini is idle.
+    NOTE: Do NOT call session.interrupt() here. Sending a cancel signal to
+    Gemini Live right before generate_reply() causes Gemini to stay in a
+    cancelled/transitional state for ~5 s, making generate_reply() time out
+    every first attempt. Callers that need to stop an in-progress generation
+    should call session.interrupt() + asyncio.sleep() themselves before
+    calling this function.
     """
     await session.generate_reply(
         instructions=f"Say exactly the following and nothing else: {text}",
@@ -974,12 +942,6 @@ async def entrypoint(ctx: agents.JobContext):
     # The greeting loop uses this to dynamically shorten the carrier wait when the
     # announcement arrives early, reducing unnecessary silence for the caller.
     _carrier_detected_at: list[float] = [0.0]
-    # Set True on a NON-FINAL transcript in expected script (Hindi/Latin) that is
-    # not a noise token or carrier phrase.  Used by the greeting task to detect
-    # "user is already speaking" before the FINAL transcript arrives, so we can
-    # skip the scripted greeting and let Gemini respond naturally — saving the
-    # ~4-8 s of generate_reply latency when user speaks during the carrier window.
-    _user_started_speaking: list[bool] = [False]
     reprompt_task: asyncio.Task | None = None
 
     # Initialize Gemini Live session.
@@ -992,7 +954,7 @@ async def entrypoint(ctx: agents.JobContext):
         allow_interruptions=True,
         min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.10),
         max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.30),
-        false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 1.20),
+        false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.50),
         user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
     )
 
@@ -1073,12 +1035,11 @@ async def entrypoint(ctx: agents.JobContext):
             # disrupts Gemini's server-side VAD state and causes generation timeouts.
             return
 
-        # Non-final transcript in expected script (Hindi/Latin) — NOT noise,
-        # NOT a carrier phrase.  Flag it so the greeting task can skip the
-        # scripted greeting and let Gemini respond naturally, saving the
-        # ~4-8 s generate_reply latency when the user speaks early.
+        # Only count the utterance as real user speech once the STT has produced
+        # a final (committed) transcript.  Non-final partials like "Thi", "This",
+        # "This call" would falsely trigger user_spoke_before_greeting before the
+        # carrier filter has enough text to recognise the full announcement phrase.
         if not getattr(ev, "is_final", False):
-            _user_started_speaking[0] = True
             return
         last_user_speech_at = time.time()
         if reprompt_task and not reprompt_task.done():
@@ -1125,8 +1086,15 @@ async def entrypoint(ctx: agents.JobContext):
                 await asyncio.sleep(1.0)
                 if time.time() - last_user_speech_at < delay:
                     continue
-                # Re-check: user may have spoken since the delay loop.
-                # _speak_scripted_line handles interrupt() internally.
+                # Stop any greeting audio still in-flight before inserting the
+                # reprompt. Without this, two concurrent generate_reply calls
+                # corrupt the Gemini session and the agent goes silent.
+                try:
+                    session.interrupt()
+                    await asyncio.sleep(1.5)
+                except Exception:
+                    pass
+                # Re-check: user may have spoken while we were interrupting.
                 if time.time() - last_user_speech_at < 1.5:
                     break
                 await _speak_scripted_line(
@@ -1192,12 +1160,20 @@ async def entrypoint(ctx: agents.JobContext):
                         )
                         _last_agent_response_at[0] = now  # prevent re-trigger while recovering
                         try:
+                            # Interrupt to clear any stuck Gemini state, then generate_reply.
+                            session.interrupt()
+                            await asyncio.sleep(1.5)
                             await session.generate_reply(
                                 instructions="Respond naturally to what the user just said.",
                                 allow_interruptions=True,
                             )
                         except Exception as wd_err:
                             logger.debug("Watchdog generate_reply failed: %s", wd_err)
+                            # Last resort: interrupt to reset Gemini VAD state
+                            try:
+                                session.interrupt()
+                            except Exception:
+                                pass
             except asyncio.CancelledError:
                 pass
 
@@ -1246,11 +1222,11 @@ async def entrypoint(ctx: agents.JobContext):
             # is safe.  With auto-activity disabled, Gemini does NOT auto-generate at
             # session.start(), so we only need time for the WebSocket connection to
             # fully establish — 3 s is sufficient.
-            warmup_sec = _get_float_env("GEMINI_SESSION_WARMUP_SEC", 3.0)
+            warmup_sec = _get_float_env("GEMINI_SESSION_WARMUP_SEC", 6.0)
             # CARRIER_ANNOUNCEMENT_WAIT_SEC: maximum time after call-answer to wait
             # for the telephony carrier announcement to finish.  Used as a fallback
             # if the announcement is never detected via STT.
-            carrier_wait = _get_float_env("CARRIER_ANNOUNCEMENT_WAIT_SEC", 5.0)
+            carrier_wait = _get_float_env("CARRIER_ANNOUNCEMENT_WAIT_SEC", 7.0)
             # After a carrier / noise event is detected, wait this many extra seconds
             # for the announcement audio to fully finish before firing the greeting.
             carrier_tail = 1.5
@@ -1275,10 +1251,7 @@ async def entrypoint(ctx: agents.JobContext):
                     dynamic_done = _carrier_detected_at[0] + carrier_tail
                     carrier_done_at = min(carrier_done_at, dynamic_done)
 
-                user_spoke_before_greeting = (
-                    last_user_speech_at > answered_at  # final transcript
-                    or _user_started_speaking[0]        # non-final expected-script speech
-                )
+                user_spoke_before_greeting = last_user_speech_at > answered_at
                 if user_spoke_before_greeting:   # skip carrier wait — user is live
                     logger.debug("User spoke during carrier wait — firing greeting immediately.")
                     break

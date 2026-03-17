@@ -5,8 +5,7 @@
       "Bash(.venv/Scripts/pip install:*)",
       "Bash(npm install:*)",
       "Bash(/d/Voice-AI-Platform/.venv/Scripts/pip install:*)",
-      "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git add:*)"
     ]
   }
 }

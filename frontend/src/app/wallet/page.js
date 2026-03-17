@@ -37,7 +37,10 @@ export default function WalletPage() {
   while (chartData.length < 7) {
     chartData.unshift({ date: '', spend: 0, calls: 0 });
   }
-  const maxSpend = Math.max(...chartData.map(d => d.spend), 1);
+  // Use spend if available; fall back to call count so the chart shows real activity
+  const useCallCount = chartData.every(d => d.spend === 0) && chartData.some(d => d.calls > 0);
+  const chartKey = useCallCount ? 'calls' : 'spend';
+  const maxSpend = Math.max(...chartData.map(d => d[chartKey]), 1);
 
   const transactions = walletData?.transactions || [];
 
@@ -120,7 +123,7 @@ export default function WalletPage() {
           {loading ? (
             <div className="w-full h-full flex items-center justify-center text-slate-500 text-sm">Loading history...</div>
           ) : chartData.map((day, i) => {
-            const heightPct = Math.max((day.spend / maxSpend) * 100, 5);
+            const heightPct = Math.max((day[chartKey] / maxSpend) * 100, 5);
             const dateObj = new Date(day.date);
             const dayLabel = day.date
               ? ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][dateObj.getDay()]
@@ -131,7 +134,7 @@ export default function WalletPage() {
                 <div
                   className={`w-full rounded-t-lg transition-colors ${isToday ? 'bg-primary' : 'bg-primary/20 hover:bg-primary/40'}`}
                   style={{height: `${heightPct}%`}}
-                  title={`$${day.spend.toFixed(2)} (${day.calls} calls)`}
+                  title={useCallCount ? `${day.calls} call${day.calls !== 1 ? 's' : ''}` : `$${day.spend.toFixed(2)} (${day.calls} calls)`}
                 ></div>
                 <span className="text-[10px] font-bold text-slate-600 uppercase">{dayLabel}</span>
               </div>

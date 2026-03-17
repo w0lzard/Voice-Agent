@@ -278,7 +278,7 @@ export default function ProfilePage() {
                 </div>
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-widest text-slate-600">Plan</p>
-                  <span className="inline-flex mt-1 items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/10 text-purple-400 uppercase">Enterprise</span>
+                  <span className="inline-flex mt-1 items-center px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-purple-500/10 text-purple-400 uppercase">{user?.plan || user?.role || 'Free'}</span>
                 </div>
               </div>
             </div>

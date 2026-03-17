@@ -59,10 +59,10 @@ export default function DashboardPage() {
   const loadData = useCallback(async () => {
     try {
       const [callsRes, walletRes] = await Promise.all([
-        fetchCalls({ limit: 10 }),
+        fetchCalls({ limit: 100 }),
         fetchWallet().catch(() => ({ ok: false })),
       ]);
-      if (callsRes?.calls) setCalls(callsRes.calls);
+      if (callsRes?.data) setCalls(callsRes.data);
       if (walletRes?.ok) setBalance(walletRes.data?.currentBalance ?? null);
     } catch (err) {
       if (err.status === 401) {
@@ -88,9 +88,80 @@ export default function DashboardPage() {
     ? `${Math.floor(avgDuration / 60)}m ${avgDuration % 60}s`
     : `${avgDuration}s`;
 
-  // Mock bar chart data
-  const days = ['MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT', 'SUN'];
-  const barHeights = [60, 40, 85, 70, 55, 30, 75];
+  // Week-over-week stats from real calls
+  const now = new Date();
+  const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+  const thisWeekCalls = calls.filter(c => c.created_at && new Date(c.created_at) >= sevenDaysAgo);
+  const lastWeekCalls = calls.filter(c => {
+    if (!c.created_at) return false;
+    const t = new Date(c.created_at);
+    return t >= fourteenDaysAgo && t < sevenDaysAgo;
+  });
+  const thisWeekTotal = thisWeekCalls.length;
+  const lastWeekTotal = lastWeekCalls.length;
+  const thisWeekCompleted = thisWeekCalls.filter(c => c.status?.toLowerCase() === 'completed').length;
+  const lastWeekCompleted = lastWeekCalls.filter(c => c.status?.toLowerCase() === 'completed').length;
+
+  function weeklyChangePct(current, previous) {
+    if (previous === 0) return undefined;
+    return `${Math.abs(Math.round(((current - previous) / previous) * 100))}%`;
+  }
+  function weeklyChangeType(current, previous) {
+    if (previous === 0) return 'neutral';
+    return current >= previous ? 'up' : 'down';
+  }
+
+  const thisWeekConvRate = thisWeekTotal ? thisWeekCompleted / thisWeekTotal : 0;
+  const lastWeekConvRate = lastWeekTotal ? lastWeekCompleted / lastWeekTotal : 0;
+
+  // Real bar chart: daily call counts for the last 7 days
+  const DAY_ABBREVS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  const last7Days = Array.from({ length: 7 }, (_, i) => {
+    const d = new Date(now);
+    d.setDate(d.getDate() - (6 - i));
+    d.setHours(0, 0, 0, 0);
+    const next = new Date(d);
+    next.setDate(next.getDate() + 1);
+    const count = calls.filter(c => {
+      if (!c.created_at) return false;
+      const t = new Date(c.created_at);
+      return t >= d && t < next;
+    }).length;
+    return { label: DAY_ABBREVS[d.getDay()], count };
+  });
+  const maxDayCount = Math.max(...last7Days.map(d => d.count), 1);
+
+  // Weekly comparison label
+  const weeklyDiff = lastWeekTotal > 0
+    ? Math.round(((thisWeekTotal - lastWeekTotal) / lastWeekTotal) * 100)
+    : null;
+  const weeklyBadgeText = weeklyDiff !== null
+    ? `${weeklyDiff >= 0 ? '↑' : '↓'} ${Math.abs(weeklyDiff)}% vs last week`
+    : `${thisWeekTotal} calls this week`;
+  const weeklyBadgeCls = weeklyDiff === null
+    ? 'bg-slate-500/10 text-slate-400'
+    : weeklyDiff >= 0
+      ? 'bg-emerald-500/10 text-emerald-400'
+      : 'bg-rose-500/10 text-rose-400';
+
+  // Real agent performance: per-agent completion rate from calls
+  const agentMap = {};
+  calls.forEach(c => {
+    const agent = c.agent_name || c.assistant_name;
+    if (!agent) return;
+    if (!agentMap[agent]) agentMap[agent] = { total: 0, completed: 0 };
+    agentMap[agent].total++;
+    if (c.status?.toLowerCase() === 'completed') agentMap[agent].completed++;
+  });
+  const agentPerf = Object.entries(agentMap)
+    .map(([name, { total, completed }]) => ({
+      name,
+      pct: total ? Math.round((completed / total) * 100) : 0,
+    }))
+    .sort((a, b) => b.pct - a.pct)
+    .slice(0, 4);
+  const AGENT_COLORS = ['bg-emerald-500', 'bg-primary', 'bg-amber-500', 'bg-slate-500'];
 
   return (
     <div className="p-6 space-y-6">
@@ -108,9 +179,9 @@ export default function DashboardPage() {
 
       {/* Stat Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-        <StatCard icon="call" label="Total Calls" value={totalCalls} change="12%" changeType="up" iconColor="text-primary" />
-        <StatCard icon="check_circle" label="Completed" value={completedCalls} change="8%" changeType="up" iconColor="text-emerald-400" />
-        <StatCard icon="trending_up" label="Conv. Rate" value={totalCalls ? `${Math.round((completedCalls/totalCalls)*100)}%` : '0%'} change="5%" changeType="up" iconColor="text-purple-400" />
+        <StatCard icon="call" label="Total Calls" value={totalCalls} change={weeklyChangePct(thisWeekTotal, lastWeekTotal)} changeType={weeklyChangeType(thisWeekTotal, lastWeekTotal)} iconColor="text-primary" />
+        <StatCard icon="check_circle" label="Completed" value={completedCalls} change={weeklyChangePct(thisWeekCompleted, lastWeekCompleted)} changeType={weeklyChangeType(thisWeekCompleted, lastWeekCompleted)} iconColor="text-emerald-400" />
+        <StatCard icon="trending_up" label="Conv. Rate" value={totalCalls ? `${Math.round((completedCalls/totalCalls)*100)}%` : '0%'} change={weeklyChangePct(Math.round(thisWeekConvRate*100), Math.round(lastWeekConvRate*100))} changeType={weeklyChangeType(thisWeekConvRate, lastWeekConvRate)} iconColor="text-purple-400" />
         <StatCard icon="timer" label="Avg Duration" value={avgDurationStr} iconColor="text-amber-400" />
         <StatCard icon="account_balance_wallet" label="Balance" value={balance !== null ? `$${balance.toFixed(2)}` : '—'} accent={true} />
       </div>
@@ -124,36 +195,41 @@ export default function DashboardPage() {
               <h3 className="text-sm font-bold text-slate-200">Calls This Week</h3>
               <p className="text-xs text-slate-500 mt-0.5">Daily call volume</p>
             </div>
-            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400">↑ 12% vs last week</span>
+            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${weeklyBadgeCls}`}>{weeklyBadgeText}</span>
           </div>
           <div className="flex items-end gap-3 h-40">
-            {days.map((day, i) => (
-              <div key={day} className="flex-1 flex flex-col items-center gap-1">
-                <div className="w-full rounded-t-lg bg-primary/20 hover:bg-primary/40 transition-colors relative" style={{height: `${barHeights[i]}%`}}>
-                  <div className="absolute inset-x-0 top-0 h-1 rounded-t-lg bg-primary"></div>
+            {last7Days.map((day, i) => {
+              const heightPct = Math.max((day.count / maxDayCount) * 100, day.count > 0 ? 8 : 3);
+              const isToday = i === last7Days.length - 1;
+              return (
+                <div key={i} className="flex-1 flex flex-col items-center gap-1">
+                  <div
+                    className={`w-full rounded-t-lg transition-colors relative ${isToday ? 'bg-primary' : 'bg-primary/20 hover:bg-primary/40'}`}
+                    style={{height: `${heightPct}%`}}
+                    title={`${day.count} call${day.count !== 1 ? 's' : ''}`}
+                  >
+                    {!isToday && <div className="absolute inset-x-0 top-0 h-1 rounded-t-lg bg-primary/60"></div>}
+                  </div>
+                  <span className="text-[10px] font-bold text-slate-600 uppercase">{day.label}</span>
                 </div>
-                <span className="text-[10px] font-bold text-slate-600 uppercase">{day}</span>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
-        {/* Quick stats */}
+        {/* Agent Performance */}
         <div className="rounded-2xl border border-white/8 p-5 space-y-4" style={{background: 'rgba(255,255,255,0.03)'}}>
           <h3 className="text-sm font-bold text-slate-200">Agent Performance</h3>
-          {[
-            { name: 'Support Agent Alpha', pct: 94, color: 'bg-emerald-500' },
-            { name: 'Sales Bot Pro', pct: 82, color: 'bg-primary' },
-            { name: 'Lead Gen AI', pct: 67, color: 'bg-amber-500' },
-            { name: 'Follow-up Agent', pct: 45, color: 'bg-slate-500' },
-          ].map(agent => (
+          {agentPerf.length === 0 ? (
+            <p className="text-xs text-slate-600 pt-2">No agent data yet.</p>
+          ) : agentPerf.map((agent, idx) => (
             <div key={agent.name}>
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-xs font-medium text-slate-300 truncate">{agent.name}</span>
                 <span className="text-xs font-bold text-slate-400 ml-2">{agent.pct}%</span>
               </div>
               <div className="h-1.5 rounded-full bg-white/5">
-                <div className={`h-1.5 rounded-full ${agent.color} transition-all`} style={{width: `${agent.pct}%`}}></div>
+                <div className={`h-1.5 rounded-full ${AGENT_COLORS[idx] || 'bg-slate-500'} transition-all`} style={{width: `${agent.pct}%`}}></div>
               </div>
             </div>
           ))}

@@ -2,20 +2,22 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
 import { API_BASE } from '../../lib/api';
 
 export default function LoginPage() {
+    const router = useRouter();
     const { login } = useAuth();
+
     const [tab, setTab] = useState('email'); // 'email' | 'phone'
 
-    // Email tab state
+    // Email login state
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
 
-    // Phone tab state
+    // Phone login state
     const [phone, setPhone] = useState('');
-    const [name, setName] = useState('');
 
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
@@ -35,18 +37,16 @@ export default function LoginPage() {
 
             const data = await res.json();
 
-            if (!res.ok) {
+            if (!res.ok || !data.ok) {
                 if (data.needsVerification) {
-                    window.location.href = `/verify?email=${encodeURIComponent(data.email)}`;
+                    router.push(`/verify?email=${encodeURIComponent(data.email || email)}`);
                     return;
                 }
                 setError(data.error || 'Login failed');
                 return;
             }
 
-            if (data.ok) {
-                login(data.token, data.user);
-            }
+            login(data.token, data.user);
         } catch {
             setError('Network error. Please make sure the backend is running.');
         } finally {
@@ -63,14 +63,17 @@ export default function LoginPage() {
             const res = await fetch(`${API_BASE}/v1/auth/phone-otp/send`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ phone, name })
+                body: JSON.stringify({ phone })
             });
+
             const data = await res.json();
-            if (!data.ok) {
+
+            if (!res.ok || !data.ok) {
                 setError(data.error || 'Failed to send OTP');
                 return;
             }
-            window.location.href = `/verify-phone?phone=${encodeURIComponent(phone)}`;
+
+            router.push(`/verify-phone?phone=${encodeURIComponent(phone)}`);
         } catch {
             setError('Network error. Please try again.');
         } finally {
@@ -79,49 +82,89 @@ export default function LoginPage() {
     };
 
     const handleGoogle = () => {
-        const clientId = 'GOOGLE_CLIENT_ID';
-        if (!clientId || clientId === 'GOOGLE_CLIENT_ID') {
-            setError('Google OAuth not configured. Add GOOGLE_CLIENT_ID to .env');
-            return;
-        }
+        setError('Google OAuth not configured. Add GOOGLE_CLIENT_ID to .env');
     };
 
     return (
         <div className="auth-page">
             <div className="auth-card">
                 <div className="auth-logo">
-                    <div style={{width: 48, height: 48, borderRadius: 14, background: '#2b6cee', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 0 20px rgba(43,108,238,0.4)'}}>
-                        <span className="material-symbols-outlined" style={{color: 'white', fontSize: 24}}>graphic_eq</span>
+                    <div
+                        style={{
+                            width: 48,
+                            height: 48,
+                            borderRadius: 14,
+                            background: '#2b6cee',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            boxShadow: '0 0 20px rgba(43,108,238,0.4)'
+                        }}
+                    >
+                        <span
+                            className="material-symbols-outlined"
+                            style={{ color: 'white', fontSize: 24 }}
+                        >
+                            graphic_eq
+                        </span>
                     </div>
                 </div>
 
                 <h1 className="auth-title">Welcome Back</h1>
                 <p className="auth-subtitle">Sign in to your VoiceAI Platform account</p>
 
-                <div style={{ display: 'flex', gap: 6, marginBottom: 20, background: 'rgba(255,255,255,0.05)', borderRadius: 10, padding: 4 }}>
+                <div
+                    style={{
+                        display: 'flex',
+                        gap: 6,
+                        marginBottom: 20,
+                        background: 'rgba(255,255,255,0.05)',
+                        borderRadius: 10,
+                        padding: 4
+                    }}
+                >
                     <button
                         type="button"
-                        onClick={() => { setTab('email'); setError(''); }}
+                        onClick={() => {
+                            setTab('email');
+                            setError('');
+                        }}
                         style={{
-                            flex: 1, padding: '7px 0', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                            flex: 1,
+                            padding: '8px 0',
+                            borderRadius: 7,
+                            border: 'none',
+                            cursor: 'pointer',
+                            fontSize: 13,
+                            fontWeight: 600,
                             background: tab === 'email' ? '#2b6cee' : 'transparent',
                             color: tab === 'email' ? '#fff' : '#6b7280',
-                            transition: 'all 0.15s',
+                            transition: 'all 0.15s'
                         }}
                     >
                         Email
                     </button>
+
                     <button
                         type="button"
-                        onClick={() => { setTab('phone'); setError(''); }}
+                        onClick={() => {
+                            setTab('phone');
+                            setError('');
+                        }}
                         style={{
-                            flex: 1, padding: '7px 0', borderRadius: 7, border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                            flex: 1,
+                            padding: '8px 0',
+                            borderRadius: 7,
+                            border: 'none',
+                            cursor: 'pointer',
+                            fontSize: 13,
+                            fontWeight: 600,
                             background: tab === 'phone' ? '#2b6cee' : 'transparent',
                             color: tab === 'phone' ? '#fff' : '#6b7280',
-                            transition: 'all 0.15s',
+                            transition: 'all 0.15s'
                         }}
                     >
-                        Phone
+                        Phone Number
                     </button>
                 </div>
 
@@ -144,7 +187,7 @@ export default function LoginPage() {
                             <label>Password</label>
                             <input
                                 type="password"
-                                placeholder="••••••••"
+                                placeholder="Minimum 8 characters"
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
                                 required
@@ -166,18 +209,6 @@ export default function LoginPage() {
                                 value={phone}
                                 onChange={(e) => setPhone(e.target.value)}
                                 required
-                            />
-                        </div>
-
-                        <div className="form-group">
-                            <label>Your Name</label>
-                            <input
-                                type="text"
-                                placeholder="John Doe"
-                                value={name}
-                                onChange={(e) => setName(e.target.value)}
-                                required
-                                minLength={2}
                             />
                         </div>
 

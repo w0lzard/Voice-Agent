@@ -18,10 +18,6 @@ const GATEWAY_URL = (
 
 // ─── Stub responses for unimplemented backend endpoints ──────────────────────
 const EXACT_STUBS = {
-  'GET /wallet': {
-    ok: true,
-    data: { balance: 0, currency: 'USD', transactions: [], daily_spend: [] },
-  },
   'GET /metrics': {
     ok: true,
     data: { total_calls: 0, active_calls: 0, success_rate: 0, total_minutes: 0, lead_conversion: 0 },
@@ -87,6 +83,55 @@ async function handleRequest(request, { params }, method) {
 
   // 1. Exact stub
   const exactKey = `${method} ${path}`;
+
+  // Dynamic wallet: compute from real calls data (no billing backend exists)
+  if (exactKey === 'GET /wallet') {
+    const authHeader = request.headers.get('authorization');
+    const emptyWallet = { ok: true, data: { currentBalance: 0, totalSpend: 0, spendChange: 0, totalCalls: 0, dailyBreakdown: [], transactions: [] } };
+    if (!authHeader) return NextResponse.json(emptyWallet);
+    try {
+      const callsRes = await fetch(`${GATEWAY_URL}/api/calls?limit=100`, { headers: { Authorization: authHeader } });
+      const callsJson = callsRes.ok ? await callsRes.json() : {};
+      const calls = Array.isArray(callsJson.calls) ? callsJson.calls : [];
+
+      // Daily breakdown keyed by date
+      const dailyMap = {};
+      calls.forEach(c => {
+        if (!c.created_at) return;
+        const dateKey = c.created_at.split('T')[0];
+        if (!dailyMap[dateKey]) dailyMap[dateKey] = { date: dateKey, calls: 0, spend: 0 };
+        dailyMap[dateKey].calls++;
+      });
+      const dailyBreakdown = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date)).slice(-7);
+
+      // Call-count change: today vs yesterday (proxy for activity trend)
+      const today = new Date().toISOString().split('T')[0];
+      const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
+      const todayCalls = dailyMap[today]?.calls ?? 0;
+      const yesterdayCalls = dailyMap[yesterday]?.calls ?? 0;
+      const spendChange = yesterdayCalls > 0
+        ? Math.round(((todayCalls - yesterdayCalls) / yesterdayCalls) * 100)
+        : 0;
+
+      // Transactions from call records
+      const transactions = calls.slice(0, 20).map(c => ({
+        id: c.call_id,
+        type: 'call',
+        description: `Call to ${c.lead_phone || c.phone_number || 'Unknown'}`,
+        time: c.created_at,
+        duration: c.duration
+          ? `${Math.floor(c.duration / 60)}:${String(c.duration % 60).padStart(2, '0')}`
+          : null,
+        amount: 0,
+        status: c.status || 'completed',
+      }));
+
+      return NextResponse.json({ ok: true, data: { currentBalance: 0, totalSpend: 0, spendChange, totalCalls: calls.length, dailyBreakdown, transactions } });
+    } catch {
+      return NextResponse.json(emptyWallet);
+    }
+  }
+
   if (EXACT_STUBS[exactKey]) return NextResponse.json(EXACT_STUBS[exactKey]);
 
   // 2. Pattern stub

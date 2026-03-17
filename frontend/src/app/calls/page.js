@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { fetchCalls, clearExpiredToken } from '@/lib/api';
+import { fetchCalls } from '@/lib/api';
 
 function StatusBadge({ status }) {
   const map = {
@@ -44,7 +44,7 @@ export default function CallHistoryPage() {
   const loadCalls = useCallback(async () => {
     try {
       const res = await fetchCalls({ limit: 100 });
-      if (res?.calls) setCalls(res.calls);
+      if (res?.data) setCalls(res.data);
       setError('');
     } catch (err) {
       if (err.status === 401) {
