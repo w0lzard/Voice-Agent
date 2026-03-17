@@ -532,25 +532,6 @@ async def _resolve_outbound_trunk_id(ctx: agents.JobContext, configured: str | N
     return trunk_id
 
 
-def _build_tts():
-    """Configure Google Gemini TTS for scripted lines (greeting, busy message).
-
-    Uses the same GOOGLE_API_KEY and voice as Gemini Live so the audio
-    sounds seamless when the conversation hands off to the realtime model.
-    """
-    voice = os.getenv("GOOGLE_REALTIME_VOICE", "Kore")
-    language = _get_realtime_language_code()
-    style_hint = (
-        os.getenv("VOICE_STYLE_HINT", "").strip()
-        or "Speak in a bright, natural feminine tone. Keep delivery smooth and clear for phone audio."
-    )
-    logger.info("Using Google Gemini TTS (voice=%s language=%s)", voice, language)
-    return google.TTS(
-        model_name="gemini-2.5-flash-tts",
-        voice_name=voice,
-        language=language,
-        prompt=style_hint,
-    )
 
 
 def _build_realtime_llm():
@@ -783,14 +764,22 @@ async def _speak_scripted_line(
     text: str,
     allow_interruptions: bool = True,
 ) -> None:
-    """Play a scripted line via TTS (session.say) for all modes.
+    """Ask Gemini Live to speak a scripted line using its native audio.
 
-    session.say() internally calls interrupt() before speaking, making it
-    completely race-free against Gemini's server-side auto-generated turns.
-    No generate_reply() is used here — that avoids the generation_created
-    race condition that caused 5s timeouts and session corruption.
+    We use generate_reply() with an explicit instruction so Gemini speaks
+    the line in its own voice — no separate TTS provider required.
+    session.interrupt() is called first to cancel any in-flight generation,
+    keeping the session state clean before injecting the scripted turn.
     """
-    await session.say(text, allow_interruptions=allow_interruptions, add_to_chat_ctx=True)
+    try:
+        session.interrupt()
+        await asyncio.sleep(0.1)
+    except Exception:
+        pass
+    await session.generate_reply(
+        instructions=f"Say exactly the following and nothing else: {text}",
+        allow_interruptions=allow_interruptions,
+    )
 
 
 async def _reject_busy_inbound(ctx: agents.JobContext) -> None:
@@ -807,8 +796,7 @@ async def _reject_busy_inbound(ctx: agents.JobContext) -> None:
     )
     try:
         busy_session = AgentSession(
-            llm=google.LLM(model=os.getenv("GOOGLE_LLM_MODEL", "gemini-2.5-flash")),
-            tts=_build_tts(),
+            llm=_build_realtime_llm(),
             turn_detection="realtime_llm",
         )
         await busy_session.start(
@@ -816,8 +804,11 @@ async def _reject_busy_inbound(ctx: agents.JobContext) -> None:
             agent=OutboundAssistant(),
             room_options=RoomOptions(close_on_disconnect=True),
         )
-        await busy_session.say(busy_text, allow_interruptions=False, add_to_chat_ctx=False)
-        await asyncio.sleep(1.0)  # brief pause so TTS audio flushes before disconnect
+        await busy_session.generate_reply(
+            instructions=f"Say exactly the following message and nothing else: {busy_text}",
+            allow_interruptions=False,
+        )
+        await asyncio.sleep(4.0)  # wait for Gemini audio to finish before disconnect
     except Exception as e:
         logger.warning("Busy-message session failed: %s", e)
     finally:
@@ -901,11 +892,10 @@ async def entrypoint(ctx: agents.JobContext):
     reprompt_task: asyncio.Task | None = None
 
     # Initialize Gemini Live session.
-    # No client-side VAD — Gemini handles server-side activity detection.
-    # TTS is added so session.say() works for scripted lines (greeting, reprompt).
+    # No separate TTS or VAD — Gemini Live handles all audio natively.
+    # Scripted lines (greeting, reprompt) use generate_reply() directly.
     session = AgentSession(
         llm=_build_realtime_llm(),
-        tts=_build_tts(),
         tools=fnc_ctx.flatten(),
         turn_detection="realtime_llm",
         allow_interruptions=True,
@@ -1146,10 +1136,9 @@ async def entrypoint(ctx: agents.JobContext):
             #
             # Fix: wait for (a) call answered confirmation AND (b) a post-answer
             # carrier window (CARRIER_ANNOUNCEMENT_WAIT_SEC, default 7s) before
-            # playing the greeting.  Using session.say() (TTS) rather than
-            # generate_reply() removes the Gemini warmup dependency entirely:
-            # TTS plays immediately from the OpenAI TTS plugin and does NOT
-            # require Gemini's realtime session to be fully initialised.
+            # playing the greeting. Gemini Live must be fully connected before
+            # generate_reply() is called, so we wait for the carrier window
+            # to give the session time to initialise.
             # ----------------------------------------------------------------
 
             # (a) Wait for the SIP call to be confirmed answered.
@@ -1232,8 +1221,6 @@ async def entrypoint(ctx: agents.JobContext):
                 )
             else:
                 # Fire greeting. One retry on transient failure.
-                # session.say() internally calls interrupt() before speaking,
-                # so no separate interrupt() call is needed here.
                 for _attempt in range(2):
                     if _call_failed.is_set():
                         logger.info("Greeting aborted mid-retry: SIP call failed.")
@@ -1256,8 +1243,7 @@ async def entrypoint(ctx: agents.JobContext):
 
             # Reset silence timer so reprompt is measured from greeting end.
             # Also reset agent-response tracker so the watchdog doesn't fire
-            # during greeting playback (session.say() is TTS and conversation_item_added
-            # may not fire for several seconds while audio is in-flight).
+            # while Gemini is generating the greeting audio.
             last_user_speech_at = time.time()
             _last_agent_response_at[0] = time.time()
             reprompt_task = asyncio.create_task(_reprompt_if_no_speech())
