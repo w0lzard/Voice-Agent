@@ -338,6 +338,22 @@ def _is_carrier_announcement(text: str) -> bool:
     return any(phrase in lower for phrase in _CARRIER_PHRASES)
 
 
+def _is_stt_noise_token(text: str) -> bool:
+    """Return True for STT artifact tokens like <noise>, <crosstalk>, etc.
+
+    These are emitted by the speech-recognition engine to indicate non-speech
+    audio events (background noise, music, laughter).  They are NOT real user
+    utterances and must not reset the silence timer or trigger the watchdog.
+    """
+    stripped = text.strip()
+    return (
+        stripped.startswith("<")
+        and stripped.endswith(">")
+        and len(stripped) <= 30
+        and " " not in stripped  # multi-word phrases are real speech
+    )
+
+
 def _safe_log_text(value: str, limit: int = 200) -> str:
     """Escape unicode for Windows terminals that still default to cp1252."""
     return value[:limit].encode("unicode_escape").decode("ascii")
@@ -1041,6 +1057,10 @@ async def entrypoint(ctx: agents.JobContext):
     # Set to call-answer timestamp once wait_until_answered returns.
     # Greeting task polls this so it can apply the post-answer carrier-window delay.
     _call_answered_at: list[float] = [0.0]
+    # Set to the time we first detect a carrier announcement or STT noise token.
+    # The greeting loop uses this to dynamically shorten the carrier wait when the
+    # announcement arrives early, reducing unnecessary silence for the caller.
+    _carrier_detected_at: list[float] = [0.0]
     reprompt_task: asyncio.Task | None = None
     realtime_audio = _use_realtime_audio()
     if not _validate_runtime_provider_keys(realtime_audio):
@@ -1143,10 +1163,18 @@ async def entrypoint(ctx: agents.JobContext):
             getattr(ev, "language", None),
             _safe_log_text(transcript),
         )
-        # Carrier announcements ("This call is now being recorded.") are spoken
-        # by the telephony provider, not the user. Counting them as user speech
-        # would falsely reset the silence timer and trigger the watchdog.
+        # Filter telephony noise — neither carrier announcements nor STT noise
+        # tokens (e.g. "<noise>", "<crosstalk>") are real user speech.
+        # Treating them as speech would falsely skip the greeting, corrupt the
+        # silence timer, and trigger the watchdog on background audio.
+        if _is_stt_noise_token(transcript):
+            if _carrier_detected_at[0] == 0.0:
+                _carrier_detected_at[0] = time.time()
+            logger.info("STT noise token '%s' — ignoring for speech timers.", transcript)
+            return
         if _is_carrier_announcement(transcript):
+            if _carrier_detected_at[0] == 0.0:
+                _carrier_detected_at[0] = time.time()
             logger.info("Carrier announcement detected — ignoring for speech timers.")
             return
         last_user_speech_at = time.time()
@@ -1331,12 +1359,21 @@ async def entrypoint(ctx: agents.JobContext):
             # CRITICAL: if the user spoke while we were waiting, do NOT call interrupt()
             # before generate_reply.  interrupt() would cancel Gemini's in-progress VAD
             # response to the user, putting Gemini into a confused/silent state.
-            warmup_sec = _get_float_env("GEMINI_SESSION_WARMUP_SEC", 13.0)
+            # GEMINI_SESSION_WARMUP_SEC: time from entrypoint start until generate_reply
+            # is safe.  We call session.interrupt() immediately after session.start() to
+            # cancel Gemini's auto-generated warmup turn; 6 s is enough settling time.
+            warmup_sec = _get_float_env("GEMINI_SESSION_WARMUP_SEC", 6.0)
+            # CARRIER_ANNOUNCEMENT_WAIT_SEC: maximum time after call-answer to wait
+            # for the telephony carrier announcement to finish.  Used as a fallback
+            # if the announcement is never detected via STT.
             carrier_wait = _get_float_env("CARRIER_ANNOUNCEMENT_WAIT_SEC", 7.0)
+            # After a carrier / noise event is detected, wait this many extra seconds
+            # for the announcement audio to fully finish before firing the greeting.
+            carrier_tail = 1.5
 
             gemini_ready_at = _entrypoint_start_at + warmup_sec
             answered_at = _call_answered_at[0] or time.time()
-            carrier_done_at = answered_at + carrier_wait
+            carrier_done_at = answered_at + carrier_wait  # static fallback
 
             user_spoke_before_greeting = False
             while True:
@@ -1346,16 +1383,21 @@ async def entrypoint(ctx: agents.JobContext):
                 if now < gemini_ready_at:        # always wait for Gemini first
                     await asyncio.sleep(0.1)
                     continue
+
+                # Dynamic carrier_done_at: if we've heard the announcement/noise,
+                # use detection_time + tail instead of the full static wait.
+                # This fires the greeting sooner when the carrier speaks early.
+                if _carrier_detected_at[0] > 0:
+                    dynamic_done = _carrier_detected_at[0] + carrier_tail
+                    carrier_done_at = min(carrier_done_at, dynamic_done)
+
                 user_spoke_before_greeting = last_user_speech_at > answered_at
                 if user_spoke_before_greeting:   # skip carrier wait — user is live
                     logger.debug("User spoke during carrier wait — firing greeting immediately.")
                     break
-                if now >= carrier_done_at:       # carrier window elapsed normally
+                if now >= carrier_done_at:       # carrier window elapsed
                     break
                 await asyncio.sleep(0.1)
-
-            if _call_failed.is_set():
-                return
 
             if _call_failed.is_set():
                 return
