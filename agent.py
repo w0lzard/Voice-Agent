@@ -645,20 +645,26 @@ def _build_realtime_llm():
         )
         extra_kwargs: dict = {}
         if _HAS_GOOGLE_GENAI_TYPES:
-            # HIGH end-of-speech sensitivity + shorter silence window cuts Gemini's
-            # turn-detection latency from ~7s down to ~1-2s.
+            # DISABLED server-side auto-activity detection — the livekit client VAD
+            # sends explicit activityStart/activityEnd signals instead.
+            #
+            # Why disabled=True:
+            #   With server-side detection ON, Gemini auto-generates the moment it
+            #   hears ANY audio (carrier announcement, background noise, anything).
+            #   Those autonomous generations race with generate_reply() calls — the
+            #   livekit SDK waits for a generation_created event but the auto-
+            #   generation already sent serverContent without one, so generate_reply
+            #   times out and permanently corrupts the session state.
+            #
+            #   With disabled=True, Gemini only speaks when:
+            #     (a) client VAD sends activityStart → end → Gemini responds naturally
+            #     (b) our code explicitly calls generate_reply() (greeting)
+            #   Both paths are race-free.
             extra_kwargs["realtime_input_config"] = google_genai_types.RealtimeInputConfig(
                 automatic_activity_detection=google_genai_types.AutomaticActivityDetection(
-                    disabled=False,
-                    start_of_speech_sensitivity=google_genai_types.StartSensitivity.START_SENSITIVITY_HIGH,
-                    end_of_speech_sensitivity=google_genai_types.EndSensitivity.END_SENSITIVITY_HIGH,
-                    prefix_padding_ms=20,
-                    # Fix: was reading wrong env var GEMINI_SILENCE_DURATION_MS; correct
-                    # name is GOOGLE_REALTIME_SILENCE_DURATION_MS (160ms in .env).
-                    silence_duration_ms=_get_int_env("GOOGLE_REALTIME_SILENCE_DURATION_MS", 160),
+                    disabled=True,
                 ),
-                # START_OF_ACTIVITY_INTERRUPTS: lets the caller cut in instantly
-                # without waiting for Gemini's turn to finish.
+                # START_OF_ACTIVITY_INTERRUPTS: caller can cut in mid-sentence.
                 activity_handling=google_genai_types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
             )
             # Enable transcription of user audio so logs/events carry full text
@@ -1069,14 +1075,20 @@ async def entrypoint(ctx: agents.JobContext):
 
     # Initialize the Agent Session with plugins
     if realtime_audio:
+        # Client-side VAD for Gemini Live.
+        # Gemini's server-side automatic activity detection is disabled in
+        # _build_realtime_llm() so it won't auto-generate when it hears audio.
+        # The livekit framework reads this VAD and sends activityStart/End to
+        # Gemini, giving us deterministic control over when Gemini speaks.
+        realtime_vad = ctx.proc.userdata.get("vad") or _build_vad()
         session = AgentSession(
             llm=_build_realtime_llm(),
+            vad=realtime_vad,
             tools=fnc_ctx.flatten(),
-            turn_detection="realtime_llm",
+            # No turn_detection="realtime_llm" — client VAD drives turn detection.
             allow_interruptions=True,
             min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.10),
             max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.30),
-            # 0.5s default prevents echo self-interruption; env can tighten further
             false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.50),
             user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
         )
@@ -1165,17 +1177,36 @@ async def entrypoint(ctx: agents.JobContext):
         )
         # Filter telephony noise — neither carrier announcements nor STT noise
         # tokens (e.g. "<noise>", "<crosstalk>") are real user speech.
-        # Treating them as speech would falsely skip the greeting, corrupt the
-        # silence timer, and trigger the watchdog on background audio.
         if _is_stt_noise_token(transcript):
             if _carrier_detected_at[0] == 0.0:
                 _carrier_detected_at[0] = time.time()
             logger.info("STT noise token '%s' — ignoring for speech timers.", transcript)
+            # Interrupt any Gemini generation triggered by the noise audio.
+            # With client-side VAD, the VAD may have signalled activityStart for
+            # this noise burst; interrupting here prevents a spurious response.
+            if getattr(ev, "is_final", False):
+                try:
+                    session.interrupt()
+                except Exception:
+                    pass
             return
         if _is_carrier_announcement(transcript):
             if _carrier_detected_at[0] == 0.0:
                 _carrier_detected_at[0] = time.time()
             logger.info("Carrier announcement detected — ignoring for speech timers.")
+            if getattr(ev, "is_final", False):
+                # Kill any Gemini response to the carrier announcement.
+                try:
+                    session.interrupt()
+                except Exception:
+                    pass
+            return
+
+        # Only count the utterance as real user speech once the STT has produced
+        # a final (committed) transcript.  Non-final partials like "Thi", "This",
+        # "This call" would falsely trigger user_spoke_before_greeting before the
+        # carrier filter has enough text to recognise the full announcement phrase.
+        if not getattr(ev, "is_final", False):
             return
         last_user_speech_at = time.time()
         if reprompt_task and not reprompt_task.done():
@@ -1360,8 +1391,9 @@ async def entrypoint(ctx: agents.JobContext):
             # before generate_reply.  interrupt() would cancel Gemini's in-progress VAD
             # response to the user, putting Gemini into a confused/silent state.
             # GEMINI_SESSION_WARMUP_SEC: time from entrypoint start until generate_reply
-            # is safe.  We call session.interrupt() immediately after session.start() to
-            # cancel Gemini's auto-generated warmup turn; 6 s is enough settling time.
+            # is safe.  With auto-activity disabled, Gemini does NOT auto-generate at
+            # session.start(), so we only need time for the WebSocket connection to
+            # fully establish — 3 s is sufficient.
             warmup_sec = _get_float_env("GEMINI_SESSION_WARMUP_SEC", 6.0)
             # CARRIER_ANNOUNCEMENT_WAIT_SEC: maximum time after call-answer to wait
             # for the telephony carrier announcement to finish.  Used as a fallback
