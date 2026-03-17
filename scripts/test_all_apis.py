@@ -116,7 +116,7 @@ async def test_all_apis():
                 "name": "Test Assistant",
                 "instructions": "You are a test assistant.",
                 "first_message": "Hello, I am a test assistant.",
-                "voice": {"provider": "openai", "voice_id": "alloy"}
+                "voice": {"provider": "google", "voice_id": "Kore"}
             })
             passed = r.status_code in [200, 201]
             log_test("POST /api/assistants (create)", passed, f"{r.status_code}")

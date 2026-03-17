@@ -21,8 +21,8 @@ router = APIRouter()
 # ============== Models ==============
 
 class VoiceConfig(BaseModel):
-    provider: str = "openai"
-    voice_id: str = "alloy"
+    provider: str = "google"
+    voice_id: str = "Kore"
 
 
 class CreateAssistantRequest(BaseModel):
@@ -62,7 +62,7 @@ async def create_assistant(
         "description": request.description,
         "instructions": request.instructions,
         "first_message": request.first_message,
-        "voice": request.voice.model_dump() if request.voice else {"provider": "openai", "voice_id": "alloy"},
+        "voice": request.voice.model_dump() if request.voice else {"provider": "google", "voice_id": "Kore"},
         "temperature": request.temperature,
         "webhook_url": request.webhook_url,
         "is_active": True,

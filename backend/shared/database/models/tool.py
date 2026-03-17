@@ -56,7 +56,7 @@ class Tool(BaseModel):
             del data["_id"]
         return cls(**data)
     
-    def to_openai_tool(self) -> Dict[str, Any]:
+    def to_tool_definition(self) -> Dict[str, Any]:
         """Convert to OpenAI function calling format."""
         properties = {}
         required = []

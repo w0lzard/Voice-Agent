@@ -65,7 +65,6 @@ REQUIRED_VARS = [
     ("OUTBOUND_TRUNK_ID",      "SIP trunk ID (ST_…)"),
     ("GOOGLE_API_KEY",         "Gemini / Google AI Studio key"),
     ("GOOGLE_REALTIME_MODEL",  "Gemini native-audio model name"),
-    ("OPENAI_API_KEY",         "OpenAI API key"),
     ("MONGODB_URI",            "MongoDB connection string"),
     ("MONGODB_DB_NAME",        "MongoDB database name"),
     ("AGENT_PERSONA_NAME",     "Agent first name"),
@@ -81,7 +80,6 @@ for var, label in REQUIRED_VARS:
         fail(f"{var}", f"{label} — NOT SET or still a placeholder")
 
 OPTIONAL_VARS = [
-    ("REALTIME_PROVIDER",              "google | openai"),
     ("GEMINI_SESSION_WARMUP_SEC",      "Gemini warmup guard (default 6 s)"),
     ("CARRIER_ANNOUNCEMENT_WAIT_SEC",  "Max carrier-wait after answer (default 7 s)"),
     ("OUTBOUND_FIRST_MESSAGE",         "Custom greeting override"),
@@ -113,16 +111,8 @@ except Exception as e:
     fail("agent_script.py import", str(e))
     prompt = ""
 
-# Check provider setting
-provider = os.getenv("REALTIME_PROVIDER", "openai").lower()
-use_google = provider == "google"
-realtime_on = os.getenv("OPENAI_REALTIME_AUDIO", "false").lower() == "true"
-if use_google:
-    ok("Provider", f"Gemini Live (REALTIME_PROVIDER=google)")
-elif realtime_on:
-    ok("Provider", f"OpenAI Realtime (REALTIME_PROVIDER={provider}, OPENAI_REALTIME_AUDIO=true)")
-else:
-    ok("Provider", f"Pipeline STT→LLM→TTS (REALTIME_PROVIDER={provider})")
+# Provider is always Gemini Live
+ok("Provider", "Gemini Live (google.realtime.RealtimeModel)")
 
 # Check warmup + carrier timing
 warmup = float(os.getenv("GEMINI_SESSION_WARMUP_SEC", "6"))
@@ -241,35 +231,7 @@ asyncio.run(test_gemini())
 
 
 # ════════════════════════════════════════════════════════════════
-# 5. OPENAI API
-# ════════════════════════════════════════════════════════════════
-section("5. OPENAI API")
-
-async def test_openai():
-    try:
-        import openai as oai
-        client = oai.AsyncOpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        model = os.getenv("OPENAI_LLM_MODEL", "gpt-4o-mini")
-        t0 = time.time()
-        r = await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": "Reply with exactly two words: API OK"}],
-            max_tokens=10,
-        )
-        ms = int((time.time() - t0) * 1000)
-        text = r.choices[0].message.content.strip()
-        ok(f"OpenAI chat ({model})", f'response="{text}" — {ms} ms')
-    except Exception as e:
-        if "quota" in str(e).lower() or "429" in str(e):
-            warn("OpenAI API", f"Rate limited / quota exhausted: {e}")
-        else:
-            fail("OpenAI API", str(e))
-
-asyncio.run(test_openai())
-
-
-# ════════════════════════════════════════════════════════════════
-# 6. MONGODB
+# 5. MONGODB
 # ════════════════════════════════════════════════════════════════
 section("6. MONGODB CONNECTIVITY")
 

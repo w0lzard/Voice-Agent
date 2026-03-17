@@ -85,7 +85,6 @@ def _try_acquire_call_slot() -> bool:
 def _release_call_slot() -> None:
     """Decrement the active-call counter."""
     _slots_read_write(-1)
-from openai.types.beta.realtime.session import InputAudioTranscription, TurnDetection
 
 # Agent conversation script — edit scripts/agent_script.py to change call flow.
 # Loaded at startup so Railway/Docker deployments don't need scripts/ on sys.path.
@@ -150,11 +149,8 @@ from livekit import agents, api
 from livekit.agents import AgentSession, Agent
 from livekit.agents.voice.room_io import RoomOptions, AudioInputOptions
 from livekit.plugins import (
-    openai,
-    deepgram,
     google,
     noise_cancellation,
-    silero,
 )
 from livekit.agents import llm
 from typing import Optional
@@ -252,14 +248,6 @@ def _get_default_language() -> str:
     return os.getenv("AGENT_DEFAULT_LANGUAGE", "hi").strip().lower() or "hi"
 
 
-def _use_realtime_audio() -> bool:
-    return _get_bool_env("OPENAI_REALTIME_AUDIO", True)
-
-
-def _get_realtime_provider() -> str:
-    return os.getenv("REALTIME_PROVIDER", "openai").strip().lower() or "openai"
-
-
 def _get_realtime_language_code() -> str:
     language = _get_default_language()
     return {
@@ -268,24 +256,10 @@ def _get_realtime_language_code() -> str:
     }.get(language, language)
 
 
-def _validate_runtime_provider_keys(realtime_audio: bool) -> bool:
-    provider = _get_realtime_provider()
-    if realtime_audio and provider == "google":
-        google_key = os.getenv("GOOGLE_API_KEY", "").strip()
-        if not google_key:
-            logger.error("GOOGLE_API_KEY is missing in environment. Cannot start Gemini Live conversation.")
-            return False
-        return True
-
-    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
-    if not openai_key:
-        logger.error("OPENAI_API_KEY is missing in environment. Cannot start outbound conversation.")
-        return False
-    if openai_key.startswith("sk-or-v1"):
-        logger.error(
-            "Detected OpenRouter key in OPENAI_API_KEY. "
-            "Please set a real OpenAI key (sk-... / sk-proj-...) in .env."
-        )
+def _validate_runtime_provider_keys() -> bool:
+    google_key = os.getenv("GOOGLE_API_KEY", "").strip()
+    if not google_key:
+        logger.error("GOOGLE_API_KEY is missing in environment. Cannot start Gemini Live conversation.")
         return False
     return True
 
@@ -559,172 +533,58 @@ async def _resolve_outbound_trunk_id(ctx: agents.JobContext, configured: str | N
 
 
 def _build_tts():
-    """Configure the Text-to-Speech provider based on env vars."""
-    provider = os.getenv("TTS_PROVIDER", "openai").lower()
-    
-    if provider == "cartesia":
-        try:
-            from livekit.plugins import cartesia
-            logger.info("Using Cartesia TTS")
-            model = os.getenv("CARTESIA_TTS_MODEL", "sonic-2")
-            voice = os.getenv("CARTESIA_TTS_VOICE", "f786b574-daa5-4673-aa0c-cbe3e8534c02")
-            return cartesia.TTS(model=model, voice=voice)
-        except ImportError:
-            logger.warning("Cartesia plugin not installed. Falling back to OpenAI TTS.")
-    
-    # Default to OpenAI
-    logger.info("Using OpenAI TTS")
-    model = os.getenv("OPENAI_TTS_MODEL", "tts-1")
-    voice = os.getenv("OPENAI_TTS_VOICE", "shimmer")
-    speed = _get_float_env("OPENAI_TTS_SPEED", 1.0)
-    response_format = os.getenv("OPENAI_TTS_RESPONSE_FORMAT", "pcm").strip() or "pcm"
-    instructions = (
-        os.getenv("OPENAI_TTS_INSTRUCTIONS", "").strip()
-        or "Speak in a soft, smooth, natural feminine voice. Avoid sharp emphasis and keep the delivery clear for phone audio."
+    """Configure Google Gemini TTS for scripted lines (greeting, busy message).
+
+    Uses the same GOOGLE_API_KEY and voice as Gemini Live so the audio
+    sounds seamless when the conversation hands off to the realtime model.
+    """
+    voice = os.getenv("GOOGLE_REALTIME_VOICE", "Kore")
+    language = _get_realtime_language_code()
+    style_hint = (
+        os.getenv("VOICE_STYLE_HINT", "").strip()
+        or "Speak in a bright, natural feminine tone. Keep delivery smooth and clear for phone audio."
     )
-    logger.info(
-        "OpenAI TTS config: model=%s voice=%s speed=%.2f format=%s",
-        model,
-        voice,
-        speed,
-        response_format,
+    logger.info("Using Google Gemini TTS (voice=%s language=%s)", voice, language)
+    return google.TTS(
+        model_name="gemini-2.5-flash-tts",
+        voice_name=voice,
+        language=language,
+        prompt=style_hint,
     )
-    return openai.TTS(
-        model=model,
-        voice=voice,
-        speed=speed,
-        instructions=instructions,
-        response_format=response_format,
-    )
-
-
-def _build_stt():
-    """Configure Speech-to-Text provider with safe fallback."""
-    provider = os.getenv("STT_PROVIDER", "deepgram").lower()
-    default_language = _get_default_language()
-
-    if provider == "deepgram":
-        if os.getenv("DEEPGRAM_API_KEY"):
-            model = os.getenv("DEEPGRAM_STT_MODEL", "nova-3")
-            language = os.getenv("DEEPGRAM_STT_LANGUAGE", "").strip() or ("hi" if default_language == "hi" else "multi")
-            logger.info("Using Deepgram STT")
-            return deepgram.STT(model=model, language=language)
-
-        logger.warning("DEEPGRAM_API_KEY is missing. Falling back to OpenAI STT.")
-
-    # Default/fallback: OpenAI STT
-    model = os.getenv("OPENAI_STT_MODEL", "gpt-4o-mini-transcribe")
-    language = os.getenv("OPENAI_STT_LANGUAGE", "").strip() or default_language
-    use_realtime = _get_bool_env("OPENAI_STT_USE_REALTIME", True)
-    turn_detection = {
-        "type": "server_vad",
-        "threshold": _get_float_env("OPENAI_STT_TURN_THRESHOLD", 0.45),
-        "prefix_padding_ms": _get_int_env("OPENAI_STT_PREFIX_PADDING_MS", 250),
-        "silence_duration_ms": _get_int_env("OPENAI_STT_SILENCE_DURATION_MS", 220),
-    }
-    logger.info(
-        "Using OpenAI STT (language=%s, realtime=%s)",
-        language or "auto",
-        use_realtime,
-    )
-    stt_kwargs = {
-        "model": model,
-        "use_realtime": use_realtime,
-    }
-    if use_realtime:
-        stt_kwargs["turn_detection"] = turn_detection
-    if language:
-        return openai.STT(language=language, **stt_kwargs)
-    return openai.STT(**stt_kwargs)
 
 
 def _build_realtime_llm():
-    """Configure realtime audio provider for lower-latency voice output."""
-    if _get_realtime_provider() == "google":
-        model = os.getenv("GOOGLE_REALTIME_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
-        voice = os.getenv("GOOGLE_REALTIME_VOICE", "Puck")
-        logger.info(
-            "Using Gemini Live audio (model=%s voice=%s language=%s)",
-            model,
-            voice,
-            _get_realtime_language_code(),
-        )
-        extra_kwargs: dict = {}
-        if _HAS_GOOGLE_GENAI_TYPES:
-            # Use Gemini's server-side activity detection (disabled=False is default).
-            # Gemini auto-generates naturally when the caller speaks — race-free because
-            # the greeting uses session.say() which calls interrupt() internally before
-            # playing TTS, so no generate_reply() races with auto-generated turns.
-            extra_kwargs["realtime_input_config"] = google_genai_types.RealtimeInputConfig(
-                automatic_activity_detection=google_genai_types.AutomaticActivityDetection(
-                    disabled=False,
-                ),
-                # START_OF_ACTIVITY_INTERRUPTS: caller can cut in mid-sentence.
-                activity_handling=google_genai_types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
-            )
-            # Enable transcription of user audio so logs/events carry full text
-            extra_kwargs["input_audio_transcription"] = google_genai_types.AudioTranscriptionConfig()
-            # Affective dialog makes Gemini mirror caller's emotional tone naturally
-            extra_kwargs["enable_affective_dialog"] = True
-
-        # Limit output tokens — shorter responses have lower TTFA (time-to-first-audio).
-        # GOOGLE_REALTIME_MAX_OUTPUT_TOKENS=96 in .env; 0 means unlimited (slower).
-        max_tokens = _get_int_env("GOOGLE_REALTIME_MAX_OUTPUT_TOKENS", 0)
-        if max_tokens > 0:
-            extra_kwargs["max_output_tokens"] = max_tokens
-
-        return google.realtime.RealtimeModel(
-            model=model,
-            voice=voice,
-            language=_get_realtime_language_code(),
-            temperature=_get_float_env("OPENAI_REALTIME_TEMPERATURE", 0.7),
-            instructions=_build_agent_instructions(),
-            **extra_kwargs,
-        )
-
-    model = os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime")
-    voice = os.getenv("OPENAI_REALTIME_VOICE", "marin")
-    speed = _get_float_env("OPENAI_REALTIME_SPEED", 1.0)
-    transcription_model = os.getenv("OPENAI_REALTIME_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
-    transcription_language = os.getenv("OPENAI_REALTIME_TRANSCRIBE_LANGUAGE", "").strip() or _get_default_language()
-    noise_reduction = os.getenv("OPENAI_REALTIME_INPUT_NOISE_REDUCTION", "near_field").strip() or None
-    turn_detection = TurnDetection(
-        type="server_vad",
-        threshold=_get_float_env("OPENAI_REALTIME_TURN_THRESHOLD", 0.40),
-        prefix_padding_ms=_get_int_env("OPENAI_REALTIME_PREFIX_PADDING_MS", 220),
-        silence_duration_ms=_get_int_env("OPENAI_REALTIME_SILENCE_DURATION_MS", 180),
-        create_response=True,
-    )
-    input_audio_transcription = InputAudioTranscription(
-        model=transcription_model,
-        language=transcription_language,
-    )
+    """Configure Gemini Live realtime audio model."""
+    model = os.getenv("GOOGLE_REALTIME_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
+    voice = os.getenv("GOOGLE_REALTIME_VOICE", "Kore")
     logger.info(
-        "Using OpenAI Realtime audio (model=%s voice=%s language=%s speed=%.2f)",
+        "Using Gemini Live audio (model=%s voice=%s language=%s)",
         model,
         voice,
-        transcription_language or "auto",
-        speed,
+        _get_realtime_language_code(),
     )
-    return openai.realtime.RealtimeModel(
+    extra_kwargs: dict = {}
+    if _HAS_GOOGLE_GENAI_TYPES:
+        extra_kwargs["realtime_input_config"] = google_genai_types.RealtimeInputConfig(
+            automatic_activity_detection=google_genai_types.AutomaticActivityDetection(
+                disabled=False,
+            ),
+            activity_handling=google_genai_types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+        )
+        extra_kwargs["input_audio_transcription"] = google_genai_types.AudioTranscriptionConfig()
+        extra_kwargs["enable_affective_dialog"] = True
+
+    max_tokens = _get_int_env("GOOGLE_REALTIME_MAX_OUTPUT_TOKENS", 0)
+    if max_tokens > 0:
+        extra_kwargs["max_output_tokens"] = max_tokens
+
+    return google.realtime.RealtimeModel(
         model=model,
         voice=voice,
-        modalities=["text", "audio"],
-        speed=speed,
-        input_audio_transcription=input_audio_transcription,
-        input_audio_noise_reduction=noise_reduction,
-        turn_detection=turn_detection,
-    )
-
-
-def _build_vad():
-    """Low-latency VAD tuning for telephony calls."""
-    return silero.VAD.load(
-        min_speech_duration=_get_float_env("VAD_MIN_SPEECH_DURATION", 0.04),
-        min_silence_duration=_get_float_env("VAD_MIN_SILENCE_DURATION", 0.25),
-        prefix_padding_duration=_get_float_env("VAD_PREFIX_PADDING_DURATION", 0.25),
-        activation_threshold=_get_float_env("VAD_ACTIVATION_THRESHOLD", 0.35),
-        sample_rate=16000,
+        language=_get_realtime_language_code(),
+        temperature=_get_float_env("GOOGLE_REALTIME_TEMPERATURE", 0.7),
+        instructions=_build_agent_instructions(),
+        **extra_kwargs,
     )
 
 
@@ -913,9 +773,8 @@ class OutboundAssistant(Agent):
 
 
 def prewarm(proc: agents.JobProcess) -> None:
-    """Keep expensive audio components ready in warm worker processes."""
-    if not _use_realtime_audio():
-        proc.userdata["vad"] = _build_vad()
+    """Keep warm worker processes ready for incoming jobs."""
+    pass
 
 
 async def _speak_scripted_line(
@@ -947,13 +806,10 @@ async def _reject_busy_inbound(ctx: agents.JobContext) -> None:
         "Please try calling again in a few minutes. Thank you!"
     )
     try:
-        tts = _build_tts()
         busy_session = AgentSession(
-            stt=_build_stt(),
-            vad=_build_vad(),
-            tts=tts,
-            llm=openai.LLM(model=os.getenv("OPENAI_LLM_MODEL", "gpt-4o-mini")),
-            turn_detection="vad",
+            llm=google.LLM(model=os.getenv("GOOGLE_LLM_MODEL", "gemini-2.5-flash")),
+            tts=_build_tts(),
+            turn_detection="realtime_llm",
         )
         await busy_session.start(
             room=ctx.room,
@@ -987,7 +843,7 @@ async def entrypoint(ctx: agents.JobContext):
     # takes 2-4s, so using its return time as the anchor understates elapsed time.
     _entrypoint_start_at = time.time()
 
-    if not _validate_runtime_provider_keys(_use_realtime_audio()):
+    if not _validate_runtime_provider_keys():
         ctx.shutdown()
         return
 
@@ -1043,51 +899,21 @@ async def entrypoint(ctx: agents.JobContext):
     # announcement arrives early, reducing unnecessary silence for the caller.
     _carrier_detected_at: list[float] = [0.0]
     reprompt_task: asyncio.Task | None = None
-    realtime_audio = _use_realtime_audio()
-    if not _validate_runtime_provider_keys(realtime_audio):
-        ctx.shutdown()
-        return
 
-    # Initialize the Agent Session with plugins
-    if realtime_audio:
-        # Gemini Live: server-side turn detection via "realtime_llm".
-        # No client-side VAD (vad=) — adding PyTorch/Silero VAD to a Gemini session
-        # causes full model inference on every audio frame and OOMs Railway containers.
-        # TTS is added so session.say() works for the scripted greeting.
-        session = AgentSession(
-            llm=_build_realtime_llm(),
-            tts=_build_tts(),
-            tools=fnc_ctx.flatten(),
-            turn_detection="realtime_llm",
-            allow_interruptions=True,
-            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.10),
-            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.30),
-            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.50),
-            user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
-        )
-    else:
-        vad = ctx.proc.userdata.get("vad") or _build_vad()
-        stt = _build_stt()
-        tts = _build_tts()
-        if hasattr(tts, "prewarm"):
-            try:
-                tts.prewarm()
-            except Exception as e:
-                logger.debug(f"TTS prewarm skipped: {e}")
-
-        session = AgentSession(
-            stt=stt,
-            vad=vad,
-            llm=openai.LLM(model=os.getenv("OPENAI_LLM_MODEL", "gpt-4o-mini")),
-            tts=tts,
-            tools=fnc_ctx.flatten(),
-            allow_interruptions=True,
-            min_interruption_duration=_get_float_env("SESSION_MIN_INTERRUPTION_DURATION", 0.10),
-            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.14),
-            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.45),
-            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.35),
-            preemptive_generation=_get_bool_env("SESSION_PREEMPTIVE_GENERATION", True),
-        )
+    # Initialize Gemini Live session.
+    # No client-side VAD — Gemini handles server-side activity detection.
+    # TTS is added so session.say() works for scripted lines (greeting, reprompt).
+    session = AgentSession(
+        llm=_build_realtime_llm(),
+        tts=_build_tts(),
+        tools=fnc_ctx.flatten(),
+        turn_detection="realtime_llm",
+        allow_interruptions=True,
+        min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.10),
+        max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.30),
+        false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.50),
+        user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
+    )
 
     # Pre-resolve greeting and trunk ID concurrently while Gemini WebSocket is connecting.
     # This hides lookup latency inside session.start() so dialing begins the moment
@@ -1130,11 +956,12 @@ async def entrypoint(ctx: agents.JobContext):
     # session.start() causes Gemini to auto-trigger _realtime_reply_task immediately
     # (it sees a system prompt and assumes it should speak). That auto-task times out
     # and permanently corrupts the generation tracker. Cancel it right away.
-    if _use_realtime_audio():
-        try:
-            session.interrupt()
-        except Exception:
-            pass
+    # Cancel any auto-generation Gemini triggers immediately after session.start()
+    # to prevent a stale _realtime_reply_task from corrupting the generation tracker.
+    try:
+        session.interrupt()
+    except Exception:
+        pass
 
     @session.on("user_input_transcribed")
     def _on_user_input_transcribed(ev) -> None:
@@ -1219,12 +1046,11 @@ async def entrypoint(ctx: agents.JobContext):
                 # Stop any greeting audio still in-flight before inserting the
                 # reprompt. Without this, two concurrent generate_reply calls
                 # corrupt the Gemini session and the agent goes silent.
-                if realtime_audio:
-                    try:
-                        session.interrupt()
-                        await asyncio.sleep(0.15)
-                    except Exception:
-                        pass
+                try:
+                    session.interrupt()
+                    await asyncio.sleep(0.15)
+                except Exception:
+                    pass
                 # Re-check: user may have spoken while we were interrupting.
                 if time.time() - last_user_speech_at < 1.5:
                     break
@@ -1291,23 +1117,18 @@ async def entrypoint(ctx: agents.JobContext):
                         )
                         _last_agent_response_at[0] = now  # prevent re-trigger while recovering
                         try:
-                            if realtime_audio:
-                                # For Gemini server-side VAD: interrupt to clear stuck state,
-                                # wait long enough for Gemini to fully reset, then generate_reply.
-                                # Longer interrupt wait (1.5s vs 0.4s) reduces chance of racing
-                                # with an in-progress auto-generation and causing a 5s timeout.
-                                session.interrupt()
-                                await asyncio.sleep(1.5)
+                            # Interrupt to clear any stuck Gemini state, then generate_reply.
+                            session.interrupt()
+                            await asyncio.sleep(1.5)
                             await session.generate_reply(
                                 instructions="Respond naturally to what the user just said.",
                                 allow_interruptions=True,
                             )
                         except Exception as wd_err:
                             logger.debug("Watchdog generate_reply failed: %s", wd_err)
-                            # Last resort: just interrupt to reset VAD state
+                            # Last resort: interrupt to reset Gemini VAD state
                             try:
-                                if realtime_audio:
-                                    session.interrupt()
+                                session.interrupt()
                             except Exception:
                                 pass
             except asyncio.CancelledError:
@@ -1478,11 +1299,10 @@ async def entrypoint(ctx: agents.JobContext):
             _call_failed.set()
             # Interrupt any Gemini generation that may already be in-flight so the
             # SDK does not log a spurious ERROR for the generate_reply timeout.
-            if realtime_audio:
-                try:
-                    session.interrupt()
-                except Exception:
-                    pass
+            try:
+                session.interrupt()
+            except Exception:
+                pass
             if _greeting_task and not _greeting_task.done():
                 _greeting_task.cancel()
             if reprompt_task and not reprompt_task.done():

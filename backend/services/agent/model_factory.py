@@ -1,212 +1,104 @@
 """
-Model factory for dynamically creating STT, LLM, and TTS instances.
-Supports multiple providers for user-selectable voice AI configuration.
+Model factory for dynamically creating STT, LLM, TTS, and Realtime instances.
+All providers use Google/Gemini. OpenAI has been removed.
 """
 import logging
 import os
-from typing import Any, Optional
-from openai.types.beta.realtime.session import TurnDetection, InputAudioTranscription
+from typing import Any
 
 logger = logging.getLogger("model-factory")
 
-deepgram = None
-elevenlabs = None
-anthropic = None
-cartesia = None
-google = None
-
-# Check which plugins are available
-AVAILABLE_PLUGINS = {
-    "openai": True,  # Always available (core)
-    "deepgram": False,
-    "elevenlabs": False,
-    "anthropic": False,
-    "cartesia": False,
-    "google": False,
-    "groq": False,
-    "assemblyai": False,
-}
-
-# Try importing plugins to check availability
+# Try importing optional plugins
 try:
-    from livekit.plugins import deepgram
-    AVAILABLE_PLUGINS["deepgram"] = True
+    from livekit.plugins import google
+    _HAS_GOOGLE = True
 except ImportError:
-    pass
+    google = None
+    _HAS_GOOGLE = False
 
 try:
     from livekit.plugins import elevenlabs
-    AVAILABLE_PLUGINS["elevenlabs"] = True
+    _HAS_ELEVENLABS = True
 except ImportError:
-    pass
-
-try:
-    from livekit.plugins import anthropic
-    AVAILABLE_PLUGINS["anthropic"] = True
-except ImportError:
-    pass
+    elevenlabs = None
+    _HAS_ELEVENLABS = False
 
 try:
     from livekit.plugins import cartesia
-    AVAILABLE_PLUGINS["cartesia"] = True
+    _HAS_CARTESIA = True
 except ImportError:
-    pass
-
-try:
-    from livekit.plugins import google
-    AVAILABLE_PLUGINS["google"] = True
-except ImportError:
-    pass
+    cartesia = None
+    _HAS_CARTESIA = False
 
 
 def get_stt(voice_config: dict) -> Any:
-    """
-    Create STT instance based on provider configuration.
-    
-    Supported providers: deepgram, openai, assemblyai
-    """
-    from livekit.plugins import openai
-    
-    provider = voice_config.get("stt_provider", "deepgram")
-    model = voice_config.get("stt_model", "nova-2")
-    language = voice_config.get("stt_language", "en")
-    
-    logger.info(f"Creating STT: provider={provider}, model={model}, language={language}")
-    
-    if provider == "openai":
-        return openai.STT(model=model, language=language)
-    
-    elif provider == "deepgram" and AVAILABLE_PLUGINS["deepgram"]:
-        from livekit.plugins import deepgram
-        return deepgram.STT(model=model, language=language)
-    
-    elif provider == "assemblyai":
-        # AssemblyAI requires API key
-        logger.warning("AssemblyAI not yet fully implemented, falling back to OpenAI")
-        return openai.STT(model="whisper-1", language=language)
-    
-    else:
-        logger.warning(f"STT provider '{provider}' not available, falling back to OpenAI")
-        return openai.STT(model="whisper-1", language=language)
+    """Create STT instance. Falls back to Google STT."""
+    if not _HAS_GOOGLE:
+        raise ImportError("livekit-plugins-google is required but not installed.")
+    provider = voice_config.get("stt_provider", "google")
+    model = voice_config.get("stt_model", "latest_long")
+    language = voice_config.get("stt_language", "hi-IN")
+    logger.info("Creating STT: provider=%s model=%s language=%s", provider, model, language)
+    return google.STT(model=model, language=language)
 
 
 def get_llm(voice_config: dict) -> Any:
-    """
-    Create LLM instance based on provider configuration.
-    
-    Supported providers: openai, anthropic, google, groq
-    """
-    from livekit.plugins import openai
-    
-    provider = voice_config.get("llm_provider", "openai")
-    model = voice_config.get("llm_model", "gpt-4o-mini")
-    
-    logger.info(f"Creating LLM: provider={provider}, model={model}")
-    
-    if provider == "openai":
-        return openai.LLM(model=model)
-    
-    elif provider == "anthropic" and AVAILABLE_PLUGINS["anthropic"]:
-        from livekit.plugins import anthropic
-        return anthropic.LLM(model=model)
-    
-    elif provider == "google" and AVAILABLE_PLUGINS["google"]:
-        return google.LLM(model=model)
-    
-    elif provider == "groq" and AVAILABLE_PLUGINS["groq"]:
-        # Groq requires special handling
-        logger.warning("Groq not yet fully implemented, falling back to OpenAI")
-        return openai.LLM(model="gpt-4o-mini")
-    
-    else:
-        logger.warning(f"LLM provider '{provider}' not available, falling back to OpenAI")
-        return openai.LLM(model="gpt-4o-mini")
+    """Create LLM instance. Uses Google Gemini."""
+    if not _HAS_GOOGLE:
+        raise ImportError("livekit-plugins-google is required but not installed.")
+    model = voice_config.get("llm_model", os.getenv("GOOGLE_LLM_MODEL", "gemini-2.5-flash"))
+    logger.info("Creating LLM: provider=google model=%s", model)
+    return google.LLM(model=model)
 
 
 def get_tts(voice_config: dict) -> Any:
-    """
-    Create TTS instance based on provider configuration.
-    
-    Supported providers: elevenlabs, openai, cartesia, deepgram
-    """
-    from livekit.plugins import openai
-    
-    provider = voice_config.get("tts_provider", "openai")
-    model = voice_config.get("tts_model", "tts-1")
-    voice_id = voice_config.get("voice_id", "alloy")
-    
-    logger.info(f"Creating TTS: provider={provider}, model={model}, voice={voice_id}")
-    
-    if provider == "openai":
-        return openai.TTS(model=model, voice=voice_id)
-    
-    elif provider == "elevenlabs" and AVAILABLE_PLUGINS["elevenlabs"]:
-        from livekit.plugins import elevenlabs
-        return elevenlabs.TTS(model_id=model, voice=voice_id)
-    
-    elif provider == "cartesia" and AVAILABLE_PLUGINS["cartesia"]:
-        from livekit.plugins import cartesia
+    """Create TTS instance. Uses Google Gemini TTS or Cartesia."""
+    provider = voice_config.get("tts_provider", "google")
+    logger.info("Creating TTS: provider=%s", provider)
+
+    if provider == "cartesia" and _HAS_CARTESIA:
+        model = voice_config.get("tts_model", "sonic-2")
+        voice_id = voice_config.get("voice_id", "")
         return cartesia.TTS(model=model, voice=voice_id)
-    
-    elif provider == "deepgram" and AVAILABLE_PLUGINS["deepgram"]:
-        from livekit.plugins import deepgram
-        return deepgram.TTS(model=model)
-    
-    else:
-        logger.warning(f"TTS provider '{provider}' not available, falling back to OpenAI")
-        return openai.TTS(model="tts-1", voice="alloy")
+
+    if provider == "elevenlabs" and _HAS_ELEVENLABS:
+        model = voice_config.get("tts_model", "eleven_turbo_v2_5")
+        voice_id = voice_config.get("voice_id", "")
+        return elevenlabs.TTS(model_id=model, voice=voice_id)
+
+    if not _HAS_GOOGLE:
+        raise ImportError("livekit-plugins-google is required but not installed.")
+    voice_name = voice_config.get("voice_id", os.getenv("GOOGLE_REALTIME_VOICE", "Kore"))
+    language = voice_config.get("language", "hi-IN")
+    return google.TTS(
+        model_name="gemini-2.5-flash-tts",
+        voice_name=voice_name,
+        language=language,
+    )
 
 
 def get_realtime_model(voice_config: dict) -> Any:
-    """
-    Create Realtime (speech-to-speech) model instance.
-    
-    Supported providers: openai, google
-    """
-    from livekit.plugins import openai
-    
-    provider = voice_config.get("realtime_provider", "openai")
-    model = voice_config.get("realtime_model", "gpt-4o-realtime-preview")
-    voice_id = voice_config.get("voice_id", "alloy")
-    temperature = voice_config.get("temperature", 0.8)
-    
-    logger.info(f"Creating Realtime: provider={provider}, model={model}, voice={voice_id}")
-    
-    if provider == "openai":
-        return openai.realtime.RealtimeModel(
-            model=model,
-            voice=voice_id,
-            temperature=temperature,
-            modalities=["text", "audio"],
-            input_audio_transcription=InputAudioTranscription(model="whisper-1"),
-            turn_detection=TurnDetection(
-                type="server_vad",
-                threshold=0.55,
-                prefix_padding_ms=400,
-                silence_duration_ms=800,
-                create_response=True,
-            ),
-        )
-    
-    elif provider == "google" and AVAILABLE_PLUGINS["google"]:
-        return google.realtime.RealtimeModel(
-            model=model,
-            voice=voice_id,
-        )
-    
-    else:
-        logger.warning(f"Realtime provider '{provider}' not available, falling back to OpenAI")
-        return openai.realtime.RealtimeModel(
-            voice=voice_id,
-            temperature=temperature,
-        )
+    """Create Gemini Live realtime model."""
+    if not _HAS_GOOGLE:
+        raise ImportError("livekit-plugins-google is required but not installed.")
+    model = voice_config.get("realtime_model", os.getenv("GOOGLE_REALTIME_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025"))
+    voice_id = voice_config.get("voice_id", os.getenv("GOOGLE_REALTIME_VOICE", "Kore"))
+    temperature = voice_config.get("temperature", float(os.getenv("GOOGLE_REALTIME_TEMPERATURE", "0.7")))
+    language = voice_config.get("language", "hi-IN")
+    logger.info("Creating Realtime: provider=google model=%s voice=%s", model, voice_id)
+    return google.realtime.RealtimeModel(
+        model=model,
+        voice=voice_id,
+        language=language,
+        temperature=temperature,
+    )
 
 
 def get_available_providers() -> dict:
-    """Return dictionary of available providers for client applications."""
+    """Return available providers for client applications."""
     return {
-        "stt": ["openai"] + ([p for p in ["deepgram", "assemblyai"] if AVAILABLE_PLUGINS.get(p)]),
-        "llm": ["openai"] + ([p for p in ["anthropic", "google", "groq"] if AVAILABLE_PLUGINS.get(p)]),
-        "tts": ["openai"] + ([p for p in ["elevenlabs", "cartesia", "deepgram"] if AVAILABLE_PLUGINS.get(p)]),
-        "realtime": ["openai"] + ([p for p in ["google"] if AVAILABLE_PLUGINS.get(p)]),
+        "stt": ["google"],
+        "llm": ["google"],
+        "tts": ["google"] + (["cartesia"] if _HAS_CARTESIA else []) + (["elevenlabs"] if _HAS_ELEVENLABS else []),
+        "realtime": ["google"],
     }

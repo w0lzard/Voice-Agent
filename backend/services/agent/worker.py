@@ -1,6 +1,6 @@
 """
 LiveKit Voice Agent Worker.
-Handles SIP calls with OpenAI Realtime API for voice interactions.
+Handles SIP calls with Gemini Live for voice interactions.
 """
 import logging
 import os
@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 from dotenv import load_dotenv
 from livekit import agents, api
 from livekit.agents import AgentSession, Agent, RoomInputOptions, metrics, MetricsCollectedEvent
-from livekit.plugins import openai, noise_cancellation
+from livekit.plugins import google, noise_cancellation
 
 # Load environment variables
 def _load_environment() -> None:
@@ -361,23 +361,17 @@ async def entrypoint(ctx: agents.JobContext):
     webhook_url = None
     temperature = 0.8
     
-    # Voice configuration (user-selectable models)
-    realtime_provider = os.getenv("REALTIME_PROVIDER", "openai").strip().lower() or "openai"
+    # Voice configuration — always Gemini Live
     voice_config = {
-        "mode": "realtime",  # realtime or pipeline
-        "voice_id": os.getenv("GOOGLE_REALTIME_VOICE", "Puck") if realtime_provider == "google" else config.OPENAI_REALTIME_VOICE,
-        "temperature": 0.8,
-        # Realtime mode
-        "realtime_provider": realtime_provider,
-        "realtime_model": os.getenv("GOOGLE_REALTIME_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025") if realtime_provider == "google" else os.getenv("OPENAI_REALTIME_MODEL", "gpt-realtime-mini"),
-        # Pipeline mode (STT → LLM → TTS)
-        "stt_provider": "deepgram",
-        "stt_model": "nova-2",
-        "stt_language": "en",
-        "llm_provider": "openai",
-        "llm_model": "gpt-4o-mini",
-        "tts_provider": "openai",
-        "tts_model": "tts-1",
+        "mode": "realtime",
+        "voice_id": os.getenv("GOOGLE_REALTIME_VOICE", "Kore"),
+        "temperature": 0.7,
+        "realtime_provider": "google",
+        "realtime_model": os.getenv("GOOGLE_REALTIME_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025"),
+        "language": "hi-IN",
+        "llm_provider": "google",
+        "llm_model": os.getenv("GOOGLE_LLM_MODEL", "gemini-2.5-flash"),
+        "tts_provider": "google",
     }
     
     try:

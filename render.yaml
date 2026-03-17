@@ -157,12 +157,8 @@ services:
         sync: false
 
       # ---- AI providers ----
-      - key: OPENAI_API_KEY
-        sync: false
       - key: GOOGLE_API_KEY
         sync: false
-      - key: REALTIME_PROVIDER
-        value: google
 
       # ---- CORS (restrict to your frontend URL in production) ----
       - key: CORS_ALLOW_ORIGINS
@@ -195,10 +191,6 @@ services:
       # ---- AI providers ----
       - key: GOOGLE_API_KEY
         sync: false
-      - key: OPENAI_API_KEY
-        sync: false
-      - key: REALTIME_PROVIDER
-        value: google
       - key: GOOGLE_REALTIME_MODEL
         value: gemini-2.5-flash-native-audio-preview-12-2025
       - key: GOOGLE_REALTIME_VOICE

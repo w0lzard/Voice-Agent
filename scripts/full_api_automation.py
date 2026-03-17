@@ -153,7 +153,7 @@ When the call is answered:
 
 Always introduce yourself as {name}.""",
                 "first_message": f"Hi there! This is {name} calling from Vobiz. How are you doing today?",
-                "voice": {"provider": "openai", "voice_id": "alloy"},
+                "voice": {"provider": "google", "voice_id": "Kore"},
                 "temperature": 0.8
             })
             

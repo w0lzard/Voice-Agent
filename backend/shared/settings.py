@@ -44,28 +44,15 @@ def _load_environment() -> None:
 _load_environment()
 
 
-def _get_realtime_provider() -> str:
-    return os.getenv("REALTIME_PROVIDER", "openai").strip().lower() or "openai"
-
-
-def _requires_openai_key() -> bool:
-    realtime_audio = os.getenv("OPENAI_REALTIME_AUDIO", "true").strip().lower() == "true"
-    return not (realtime_audio and _get_realtime_provider() == "google")
-
-
 class Config:
     """Application configuration from environment variables."""
-    
+
     # LiveKit
     LIVEKIT_URL = os.getenv("LIVEKIT_URL")
     LIVEKIT_API_KEY = os.getenv("LIVEKIT_API_KEY")
     LIVEKIT_API_SECRET = os.getenv("LIVEKIT_API_SECRET")
-    
-    # OpenAI
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-    OPENAI_REALTIME_VOICE = os.getenv("OPENAI_REALTIME_VOICE", "alloy")
-    
-    # Google/Gemini (for post-call analysis and Gemini Live)
+
+    # Google/Gemini
     GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
     
     # Additional Voice AI Providers (optional)
@@ -125,10 +112,7 @@ class Config:
             ("LIVEKIT_API_SECRET", cls.LIVEKIT_API_SECRET),
             ("MONGODB_URI", cls.MONGODB_URI),
         ]
-        if _requires_openai_key():
-            required.append(("OPENAI_API_KEY", cls.OPENAI_API_KEY))
-        else:
-            required.append(("GOOGLE_API_KEY", cls.GOOGLE_API_KEY))
+        required.append(("GOOGLE_API_KEY", cls.GOOGLE_API_KEY))
         missing = [name for name, value in required if not value]
         if missing:
             raise ValueError(f"Missing required environment variables: {', '.join(missing)}")

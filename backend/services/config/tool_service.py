@@ -180,4 +180,4 @@ class ToolService:
         # For now, return all active tools
         # Later: can be filtered by assistant's tool list
         tools = await ToolService.list_tools(is_active=True)
-        return [tool.to_openai_tool() for tool in tools]
+        return [tool.to_tool_definition() for tool in tools]

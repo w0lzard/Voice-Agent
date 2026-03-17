@@ -182,8 +182,8 @@ When the call is answered:
 Keep responses concise and natural.""",
                 "first_message": "Hi there! This is Alex calling from Vobiz. I hope I'm not catching you at a bad time. This is a quick test call from our AI platform. How are you doing today?",
                 "voice": {
-                    "provider": "openai",
-                    "voice_id": "alloy"
+                    "provider": "google",
+                    "voice_id": "Kore"
                 },
                 "temperature": 0.8
             })
