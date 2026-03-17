@@ -1282,9 +1282,10 @@ async def entrypoint(ctx: agents.JobContext):
             # for the telephony carrier announcement to finish.  Used as a fallback
             # if the announcement is never detected via STT.
             carrier_wait = _get_float_env("CARRIER_ANNOUNCEMENT_WAIT_SEC", 7.0)
-            # After a carrier / noise event is detected, wait this many extra seconds
-            # for the announcement audio to fully finish before firing the greeting.
-            carrier_tail = 1.5
+            # After the LAST carrier / noise event, wait this many seconds before
+            # greeting.  Gemini processes carrier-as-user-turn in <100ms, so 0.8s
+            # is enough safety margin without adding noticeable latency.
+            carrier_tail = _get_float_env("CARRIER_TAIL_SEC", 0.8)
 
             gemini_ready_at = _entrypoint_start_at + warmup_sec
             answered_at = _call_answered_at[0] or time.time()
