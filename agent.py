@@ -289,8 +289,8 @@ def _default_first_message(agent_name: str, company: str, language: str) -> str:
 
 def _default_reprompt(language: str) -> str:
     if language == "hi":
-        return "Namaste, kya abhi baat karna theek rahega?"
-    return "Hello, is this a good time to talk?"
+        return "Hello? Kya aap wahan hain? Kya aap mujhe sun pa rahe hain?"
+    return "Hello? Are you still there? Can you hear me?"
 
 
 # Carrier auto-announcement phrases spoken by the telephony provider — NOT real user
@@ -792,13 +792,17 @@ async def _speak_scripted_line(
     We use generate_reply() with an explicit instruction so Gemini speaks
     the line in its own voice — no separate TTS provider required.
 
-    NOTE: Do NOT call session.interrupt() here. Sending a cancel signal to
-    Gemini Live right before generate_reply() causes Gemini to stay in a
-    cancelled/transitional state for ~5 s, making generate_reply() time out
-    every first attempt. Callers that need to stop an in-progress generation
-    should call session.interrupt() + asyncio.sleep() themselves before
-    calling this function.
+    interrupt() is called first to cancel any in-progress or auto-triggered
+    Gemini generation (Gemini often auto-responds to user audio before our
+    generate_reply fires, blocking it for 8+ seconds). We sleep 2.0 s to let
+    Gemini fully process the cancel signal — 0.1 s is not enough and causes
+    a 5 s timeout on the first attempt.
     """
+    try:
+        session.interrupt()
+        await asyncio.sleep(2.0)
+    except Exception:
+        pass
     await session.generate_reply(
         instructions=f"Say exactly the following and nothing else: {text}",
         allow_interruptions=allow_interruptions,
@@ -1109,15 +1113,8 @@ async def entrypoint(ctx: agents.JobContext):
                 await asyncio.sleep(1.0)
                 if time.time() - last_user_speech_at < delay:
                     continue
-                # Stop any greeting audio still in-flight before inserting the
-                # reprompt. Without this, two concurrent generate_reply calls
-                # corrupt the Gemini session and the agent goes silent.
-                try:
-                    session.interrupt()
-                    await asyncio.sleep(1.5)
-                except Exception:
-                    pass
-                # Re-check: user may have spoken while we were interrupting.
+                # Re-check: user may have spoken since the delay loop.
+                # _speak_scripted_line handles interrupt() internally.
                 if time.time() - last_user_speech_at < 1.5:
                     break
                 await _speak_scripted_line(
