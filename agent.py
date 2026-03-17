@@ -319,19 +319,41 @@ def _is_carrier_announcement(text: str) -> bool:
 
 
 def _is_stt_noise_token(text: str) -> bool:
-    """Return True for STT artifact tokens like <noise>, <crosstalk>, etc.
+    """Return True for STT artifact tokens that are carrier/telephony noise.
 
-    These are emitted by the speech-recognition engine to indicate non-speech
-    audio events (background noise, music, laughter).  They are NOT real user
-    utterances and must not reset the silence timer or trigger the watchdog.
+    Covers three cases:
+      1. Literal markers: <noise>, <crosstalk>, <inaudible>, etc.
+      2. Punctuation-only strings with no alphanumeric characters (e.g. ".", "...").
+         These are carrier line artifacts — not real speech.
+      3. Multilingual garbage: carrier audio transcribed as random non-Latin,
+         non-Devanagari words (Bengali, Tamil, Thai, Arabic, Cyrillic, etc.).
+
+    Expected scripts for hi-IN / en-IN calls:
+      - Latin / Latin Extended: U+0000-U+024F  (English, Hinglish)
+      - Devanagari: U+0900-U+097F              (Hindi script)
     """
     stripped = text.strip()
-    return (
+    if not stripped:
+        return True
+    # Case 1: literal noise markers like <noise>, <crosstalk>
+    if (
         stripped.startswith("<")
         and stripped.endswith(">")
         and len(stripped) <= 30
-        and " " not in stripped  # multi-word phrases are real speech
-    )
+        and " " not in stripped
+    ):
+        return True
+    # Case 2: no alphanumeric characters at all — punctuation/symbol-only
+    if not any(c.isalnum() for c in stripped):
+        return True
+    # Case 3: every alphabetic character is in an unexpected Unicode block
+    def _is_expected_alpha(c: str) -> bool:
+        cp = ord(c)
+        return cp <= 0x024F or 0x0900 <= cp <= 0x097F
+    alpha_chars = [c for c in stripped if c.isalpha()]
+    if alpha_chars and all(not _is_expected_alpha(c) for c in alpha_chars):
+        return True
+    return False
 
 
 def _safe_log_text(value: str, limit: int = 200) -> str:
@@ -1160,20 +1182,12 @@ async def entrypoint(ctx: agents.JobContext):
                         )
                         _last_agent_response_at[0] = now  # prevent re-trigger while recovering
                         try:
-                            # Interrupt to clear any stuck Gemini state, then generate_reply.
-                            session.interrupt()
-                            await asyncio.sleep(1.5)
                             await session.generate_reply(
                                 instructions="Respond naturally to what the user just said.",
                                 allow_interruptions=True,
                             )
                         except Exception as wd_err:
                             logger.debug("Watchdog generate_reply failed: %s", wd_err)
-                            # Last resort: interrupt to reset Gemini VAD state
-                            try:
-                                session.interrupt()
-                            except Exception:
-                                pass
             except asyncio.CancelledError:
                 pass
 
