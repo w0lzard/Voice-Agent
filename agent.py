@@ -1065,15 +1065,13 @@ async def entrypoint(ctx: agents.JobContext):
         # Filter telephony noise — neither carrier announcements nor STT noise
         # tokens (e.g. "<noise>", "<crosstalk>") are real user speech.
         if _is_stt_noise_token(transcript):
-            if _carrier_detected_at[0] == 0.0:
-                _carrier_detected_at[0] = time.time()
+            _carrier_detected_at[0] = time.time()  # always update to latest noise event
             logger.info("STT noise token '%s' — ignoring for speech timers.", transcript)
             # Do NOT interrupt here — calling session.interrupt() on noise events
             # disrupts Gemini's server-side VAD state and causes generation timeouts.
             return
         if _is_carrier_announcement(transcript):
-            if _carrier_detected_at[0] == 0.0:
-                _carrier_detected_at[0] = time.time()
+            _carrier_detected_at[0] = time.time()  # always update to latest carrier event
             logger.info("Carrier announcement detected — ignoring for speech timers.")
             # Do NOT interrupt here — calling session.interrupt() on carrier events
             # disrupts Gemini's server-side VAD state and causes generation timeouts.
@@ -1301,12 +1299,15 @@ async def entrypoint(ctx: agents.JobContext):
                     await asyncio.sleep(0.1)
                     continue
 
-                # Dynamic carrier_done_at: if we've heard the announcement/noise,
-                # use detection_time + tail instead of the full static wait.
-                # This fires the greeting sooner when the carrier speaks early.
+                # Dynamic carrier_done_at: extend the deadline every time new
+                # carrier/noise audio is detected, so the greeting never fires
+                # while the carrier announcement is still streaming.
+                # Use max() so each new detection pushes the deadline FORWARD.
+                # The static carrier_done_at (answered_at + carrier_wait) acts as
+                # the baseline when no carrier is detected at all.
                 if _carrier_detected_at[0] > 0:
                     dynamic_done = _carrier_detected_at[0] + carrier_tail
-                    carrier_done_at = min(carrier_done_at, dynamic_done)
+                    carrier_done_at = max(carrier_done_at, dynamic_done)
 
                 user_spoke_before_greeting = last_user_speech_at > answered_at
                 if user_spoke_before_greeting:   # skip carrier wait — user is live
