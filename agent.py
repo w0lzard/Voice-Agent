@@ -985,10 +985,10 @@ async def entrypoint(ctx: agents.JobContext):
         llm=_build_realtime_llm(),
         tools=fnc_ctx.flatten(),
         turn_detection="realtime_llm",
-        allow_interruptions=False,
+        allow_interruptions=True,
         min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.10),
         max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.30),
-        false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.50),
+        false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 1.20),
         user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
     )
 
