@@ -792,17 +792,13 @@ async def _speak_scripted_line(
     We use generate_reply() with an explicit instruction so Gemini speaks
     the line in its own voice — no separate TTS provider required.
 
-    interrupt() is called first to cancel any in-progress or auto-triggered
-    Gemini generation (Gemini often auto-responds to user audio before our
-    generate_reply fires, blocking it for 8+ seconds). We sleep 2.0 s to let
-    Gemini fully process the cancel signal — 0.1 s is not enough and causes
-    a 5 s timeout on the first attempt.
+    IMPORTANT: Do NOT call session.interrupt() before generate_reply().
+    interrupt() corrupts Gemini Live's internal state machine: the next
+    generate_reply always times out (5 s) and Gemini then generates its own
+    natural response (e.g. "Haan") instead of following our "Say exactly:"
+    instruction.  Without interrupt(), generate_reply() queues behind any
+    in-progress Gemini auto-generation and fires correctly once Gemini is idle.
     """
-    try:
-        session.interrupt()
-        await asyncio.sleep(2.0)
-    except Exception:
-        pass
     await session.generate_reply(
         instructions=f"Say exactly the following and nothing else: {text}",
         allow_interruptions=allow_interruptions,
@@ -1242,11 +1238,11 @@ async def entrypoint(ctx: agents.JobContext):
             # is safe.  With auto-activity disabled, Gemini does NOT auto-generate at
             # session.start(), so we only need time for the WebSocket connection to
             # fully establish — 3 s is sufficient.
-            warmup_sec = _get_float_env("GEMINI_SESSION_WARMUP_SEC", 6.0)
+            warmup_sec = _get_float_env("GEMINI_SESSION_WARMUP_SEC", 3.0)
             # CARRIER_ANNOUNCEMENT_WAIT_SEC: maximum time after call-answer to wait
             # for the telephony carrier announcement to finish.  Used as a fallback
             # if the announcement is never detected via STT.
-            carrier_wait = _get_float_env("CARRIER_ANNOUNCEMENT_WAIT_SEC", 7.0)
+            carrier_wait = _get_float_env("CARRIER_ANNOUNCEMENT_WAIT_SEC", 5.0)
             # After a carrier / noise event is detected, wait this many extra seconds
             # for the announcement audio to fully finish before firing the greeting.
             carrier_tail = 1.5
