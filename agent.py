@@ -1113,15 +1113,7 @@ async def entrypoint(ctx: agents.JobContext):
                 await asyncio.sleep(1.0)
                 if time.time() - last_user_speech_at < delay:
                     continue
-                # Stop any greeting audio still in-flight before inserting the
-                # reprompt. Without this, two concurrent generate_reply calls
-                # corrupt the Gemini session and the agent goes silent.
-                try:
-                    session.interrupt()
-                    await asyncio.sleep(1.5)
-                except Exception:
-                    pass
-                # Re-check: user may have spoken while we were interrupting.
+                # Re-check: user may have spoken while we were sleeping.
                 if time.time() - last_user_speech_at < 1.5:
                     break
                 await _speak_scripted_line(
