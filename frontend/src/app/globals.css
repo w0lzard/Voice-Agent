@@ -94,7 +94,46 @@ html, body {
 .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
 .custom-scrollbar::-webkit-scrollbar-thumb { background: #232f48; border-radius: 10px; }
 
-/* Animations */
+/* ===== Landing Page Utilities ===== */
+
+/* Radial blue glow for the hero section */
+.hero-gradient {
+  background: radial-gradient(circle at 50% 50%, rgba(43, 108, 238, 0.15) 0%, transparent 60%);
+}
+
+/* Gradient text shorthand */
+.gradient-text {
+  background: linear-gradient(to right, #ffffff, #ffffff, #94a3b8);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Waveform bars animation */
+@keyframes waveform {
+  0%, 100% { transform: scaleY(0.5); }
+  50%       { transform: scaleY(1.15); }
+}
+
+.wave-bar {
+  animation: waveform 1.4s ease-in-out infinite;
+  transform-origin: bottom;
+}
+
+/* Stagger each bar so they form a live-wave pattern */
+.wave-bar:nth-child(1) { animation-delay: 0.00s; }
+.wave-bar:nth-child(2) { animation-delay: 0.15s; }
+.wave-bar:nth-child(3) { animation-delay: 0.30s; }
+.wave-bar:nth-child(4) { animation-delay: 0.45s; }
+.wave-bar:nth-child(5) { animation-delay: 0.60s; }
+.wave-bar:nth-child(6) { animation-delay: 0.45s; }
+.wave-bar:nth-child(7) { animation-delay: 0.30s; }
+.wave-bar:nth-child(8) { animation-delay: 0.15s; }
+
+/* Smooth anchor-link scrolling */
+html { scroll-behavior: smooth; }
+
+/* ===== Animations ===== */
 @keyframes pulse-glow {
   0%, 100% { opacity: 1; box-shadow: 0 0 5px rgba(43, 108, 238, 0.5); }
   50% { opacity: 0.8; box-shadow: 0 0 20px rgba(43, 108, 238, 0.8); }

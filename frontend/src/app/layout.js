@@ -4,8 +4,8 @@ import AppShell from "@/components/AppShell";
 import { WebSocketProvider } from "@/contexts/WebSocketContext";
 
 export const metadata = {
-  title: "VoiceAI Platform — Dashboard",
-  description: "AI-powered voice calling platform for managing outbound calls, leads, and voice campaigns",
+  title: "VoiceAI — AI Calling Agents for Real Estate",
+  description: "Automate lead qualification, appointment booking, and follow-ups with human-like AI voice agents that never sleep.",
 };
 
 export default function RootLayout({ children }) {
