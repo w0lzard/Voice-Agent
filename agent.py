@@ -768,14 +768,14 @@ async def _speak_scripted_line(
 
     We use generate_reply() with an explicit instruction so Gemini speaks
     the line in its own voice — no separate TTS provider required.
-    session.interrupt() is called first to cancel any in-flight generation,
-    keeping the session state clean before injecting the scripted turn.
+
+    NOTE: Do NOT call session.interrupt() here. Sending a cancel signal to
+    Gemini Live right before generate_reply() causes Gemini to stay in a
+    cancelled/transitional state for ~5 s, making generate_reply() time out
+    every first attempt. Callers that need to stop an in-progress generation
+    should call session.interrupt() + asyncio.sleep() themselves before
+    calling this function.
     """
-    try:
-        session.interrupt()
-        await asyncio.sleep(0.1)
-    except Exception:
-        pass
     await session.generate_reply(
         instructions=f"Say exactly the following and nothing else: {text}",
         allow_interruptions=allow_interruptions,
@@ -1091,7 +1091,7 @@ async def entrypoint(ctx: agents.JobContext):
                 # corrupt the Gemini session and the agent goes silent.
                 try:
                     session.interrupt()
-                    await asyncio.sleep(0.15)
+                    await asyncio.sleep(1.5)
                 except Exception:
                     pass
                 # Re-check: user may have spoken while we were interrupting.
