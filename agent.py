@@ -319,23 +319,15 @@ def _is_carrier_announcement(text: str) -> bool:
 
 
 def _is_stt_noise_token(text: str) -> bool:
-    """Return True for STT artifact tokens that are carrier/telephony noise.
+    """Return True for unambiguous STT artifacts that are never real speech.
 
-    Covers three cases:
-      1. Literal markers: <noise>, <crosstalk>, <inaudible>, etc.
-      2. Punctuation-only strings with no alphanumeric characters (e.g. ".", "...").
-         These are carrier line artifacts — not real speech.
-      3. Multilingual garbage: carrier audio transcribed as random non-Latin,
-         non-Devanagari words (Bengali, Tamil, Thai, Arabic, Cyrillic, etc.).
-
-    Expected scripts for hi-IN / en-IN calls:
-      - Latin / Latin Extended: U+0000-U+024F  (English, Hinglish)
-      - Devanagari: U+0900-U+097F              (Hindi script)
+    Case 1: Literal engine markers  — <noise>, <crosstalk>, <inaudible>, etc.
+    Case 2: Punctuation/symbol-only — ".", "...", "!" etc. (zero letters/digits).
     """
     stripped = text.strip()
     if not stripped:
         return True
-    # Case 1: literal noise markers like <noise>, <crosstalk>
+    # Case 1: literal noise markers emitted by the STT engine
     if (
         stripped.startswith("<")
         and stripped.endswith(">")
@@ -343,17 +335,29 @@ def _is_stt_noise_token(text: str) -> bool:
         and " " not in stripped
     ):
         return True
-    # Case 2: no alphanumeric characters at all — punctuation/symbol-only
+    # Case 2: no alphanumeric characters at all — cannot be speech
     if not any(c.isalnum() for c in stripped):
         return True
-    # Case 3: every alphabetic character is in an unexpected Unicode block
-    def _is_expected_alpha(c: str) -> bool:
-        cp = ord(c)
-        return cp <= 0x024F or 0x0900 <= cp <= 0x097F
-    alpha_chars = [c for c in stripped if c.isalpha()]
-    if alpha_chars and all(not _is_expected_alpha(c) for c in alpha_chars):
-        return True
     return False
+
+
+def _is_foreign_script(text: str) -> bool:
+    """Return True when every alphabetic character is outside Latin + Devanagari.
+
+    Used to classify carrier-line artefacts that appear as foreign-script words
+    (Telugu, Arabic, Cyrillic, Malayalam, Tamil, Thai, etc.) without hard-blocking
+    them from Gemini's context. Tokens that pass this check are handed to Gemini
+    but do NOT reset the silence / reprompt timers, so the 7-second no-speech
+    reprompt still fires when only carrier noise is present.
+    """
+    stripped = text.strip()
+    alpha_chars = [c for c in stripped if c.isalpha()]
+    if not alpha_chars:
+        return False  # no alpha → handled by _is_stt_noise_token already
+    def _is_expected(c: str) -> bool:
+        cp = ord(c)
+        return cp <= 0x024F or 0x0900 <= cp <= 0x097F   # Latin + Devanagari
+    return all(not _is_expected(c) for c in alpha_chars)
 
 
 def _safe_log_text(value: str, limit: int = 200) -> str:
@@ -1068,6 +1072,19 @@ async def entrypoint(ctx: agents.JobContext):
         # carrier filter has enough text to recognise the full announcement phrase.
         if not getattr(ev, "is_final", False):
             return
+
+        # Foreign-script tokens (Telugu, Arabic, Cyrillic, Malayalam, etc.) may
+        # be carrier-line artefacts OR genuine user speech in another language.
+        # Gemini receives them in context either way and will respond per RULE 1.
+        # We do NOT update silence timers for them so the 7-second reprompt still
+        # fires when only carrier noise is present.
+        if _is_foreign_script(transcript):
+            logger.info(
+                "STT foreign-script (final): \"%s\" — Gemini handles, timers unchanged.",
+                _safe_log_text(transcript),
+            )
+            return
+
         logger.info("STT accepted (final): \"%s\" → passing to Gemini LLM", _safe_log_text(transcript))
         last_user_speech_at = time.time()
         if reprompt_task and not reprompt_task.done():
