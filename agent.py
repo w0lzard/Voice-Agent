@@ -289,8 +289,8 @@ def _default_first_message(agent_name: str, company: str, language: str) -> str:
 
 def _default_reprompt(language: str) -> str:
     if language == "hi":
-        return "Namaste, kya abhi baat karna theek rahega?"
-    return "Hello, is this a good time to talk?"
+        return "Hello? Kya aap wahan hain? Kya aap mujhe sun pa rahe hain?"
+    return "Hello? Are you still there? Can you hear me?"
 
 
 # Carrier auto-announcement phrases spoken by the telephony provider — NOT real user
@@ -1068,12 +1068,12 @@ async def entrypoint(ctx: agents.JobContext):
         # carrier filter has enough text to recognise the full announcement phrase.
         if not getattr(ev, "is_final", False):
             return
+        logger.info("STT accepted (final): \"%s\" → passing to Gemini LLM", _safe_log_text(transcript))
         last_user_speech_at = time.time()
         if reprompt_task and not reprompt_task.done():
             reprompt_task.cancel()
             reprompt_task = None
-        if getattr(ev, "is_final", False):
-            fnc_ctx.set_last_user_utterance(transcript)
+        fnc_ctx.set_last_user_utterance(transcript)
 
     @session.on("conversation_item_added")
     def _on_conversation_item_added(ev) -> None:
