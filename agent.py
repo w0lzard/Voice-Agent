@@ -572,7 +572,12 @@ def _build_realtime_llm():
             automatic_activity_detection=google_genai_types.AutomaticActivityDetection(
                 disabled=False,
             ),
-            activity_handling=google_genai_types.ActivityHandling.START_OF_ACTIVITY_INTERRUPTS,
+            # NO_INTERRUPTION: Gemini finishes its full sentence before processing
+            # new user input. START_OF_ACTIVITY_INTERRUPTS causes Gemini to pause
+            # on carrier noise, then wait for the "end of activity" signal — which
+            # never comes cleanly on noisy Indian carrier lines, producing 5-10s
+            # STT finalization delays and fragmented agent responses.
+            activity_handling=google_genai_types.ActivityHandling.NO_INTERRUPTION,
         )
         extra_kwargs["input_audio_transcription"] = google_genai_types.AudioTranscriptionConfig()
         extra_kwargs["enable_affective_dialog"] = True
