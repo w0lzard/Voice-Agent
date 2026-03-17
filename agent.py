@@ -815,13 +815,66 @@ async def _reject_busy_inbound(ctx: agents.JobContext) -> None:
         ctx.shutdown()
 
 
+async def _reject_busy_outbound(ctx: agents.JobContext, phone_number: str) -> None:
+    """
+    Called when MAX_CONCURRENT_CALLS is reached for an outbound call.
+    Dials the number, speaks a bilingual 'call back' message, then hangs up.
+    """
+    trunk_id = os.getenv("OUTBOUND_TRUNK_ID", "").strip() or None
+    if not trunk_id:
+        logger.warning("OUTBOUND_TRUNK_ID not set; cannot play busy message for %s", phone_number)
+        ctx.shutdown()
+        return
+
+    busy_text = (
+        "Namaste! Abhi hamare saare agents busy hain. "
+        "Hum aapko jald hi wapas call karenge. Dhanyavaad! "
+        "Hello! All our agents are currently busy. "
+        "We will call you back shortly. Thank you!"
+    )
+    try:
+        await ctx.connect()
+        await asyncio.wait_for(
+            asyncio.ensure_future(
+                ctx.api.sip.create_sip_participant(
+                    api.CreateSIPParticipantRequest(
+                        room_name=ctx.room.name,
+                        sip_trunk_id=trunk_id,
+                        sip_call_to=phone_number,
+                        participant_identity=f"sip_{phone_number}",
+                        wait_until_answered=True,
+                    )
+                )
+            ),
+            timeout=45,
+        )
+        busy_session = AgentSession(
+            llm=_build_realtime_llm(),
+            turn_detection="realtime_llm",
+        )
+        await busy_session.start(
+            room=ctx.room,
+            agent=OutboundAssistant(),
+            room_options=RoomOptions(close_on_disconnect=True),
+        )
+        await busy_session.generate_reply(
+            instructions=f"Say exactly the following message and nothing else: {busy_text}",
+            allow_interruptions=False,
+        )
+        await asyncio.sleep(5.0)
+    except Exception as e:
+        logger.warning("Outbound busy-message failed: %s", e)
+    finally:
+        ctx.shutdown()
+
+
 async def entrypoint(ctx: agents.JobContext):
     """
     Main entrypoint for the agent.
 
     Enforces MAX_CONCURRENT_CALLS (default 3). A 4th concurrent call:
     - Inbound: hears a bilingual "all agents busy, please call back" message.
-    - Outbound: job is silently dropped (phone never dialled — no one to notify).
+    - Outbound: dials the number, plays the busy message, hangs up.
 
     For outbound calls:
     1. Checks for 'phone_number' in the job metadata.
@@ -860,8 +913,8 @@ async def entrypoint(ctx: agents.JobContext):
             "Inbound" if not phone_number else "Outbound",
         )
         if phone_number:
-            # Outbound: phone hasn't been dialled yet — nothing to tell the callee.
-            ctx.shutdown()
+            # Outbound: dial the number and play a busy message before hanging up.
+            await _reject_busy_outbound(ctx, phone_number)
             return
         # Inbound: caller is already on the line — play the busy message.
         await _reject_busy_inbound(ctx)
@@ -1301,6 +1354,13 @@ async def entrypoint(ctx: agents.JobContext):
 
 
 if __name__ == "__main__":
+    # Reset stale slot counter from any previous process run.
+    # Without this, a crashed/restarted worker keeps the old count and rejects all calls.
+    try:
+        _SLOTS_FILE.write_bytes(b"0")
+    except Exception:
+        pass
+
     # The agent name "outbound-caller" is used by the dispatch script to find this worker
     agents.cli.run_app(
         agents.WorkerOptions(
