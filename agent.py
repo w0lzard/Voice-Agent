@@ -582,6 +582,12 @@ def _build_realtime_llm():
         extra_kwargs["realtime_input_config"] = google_genai_types.RealtimeInputConfig(
             automatic_activity_detection=google_genai_types.AutomaticActivityDetection(
                 disabled=False,
+                # Finalize the user's turn after 600ms of silence (default ~2000ms).
+                # On noisy Indian carrier lines the normal 2s window causes 5-10s
+                # STT finalization delays because carrier noise keeps resetting it.
+                silence_duration_ms=_get_int_env("GEMINI_SILENCE_DURATION_MS", 600),
+                # Small prefix padding so leading syllables aren't clipped.
+                prefix_padding_ms=_get_int_env("GEMINI_PREFIX_PADDING_MS", 100),
             ),
             # NO_INTERRUPTION: Gemini finishes its full sentence before processing
             # new user input. START_OF_ACTIVITY_INTERRUPTS causes Gemini to pause
@@ -992,7 +998,7 @@ async def entrypoint(ctx: agents.JobContext):
         allow_interruptions=True,
         min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.10),
         max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.30),
-        false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.50),
+        false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 1.20),
         user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
     )
 
@@ -1196,7 +1202,7 @@ async def entrypoint(ctx: agents.JobContext):
             greeting and Gemini's turn-detection silently fails to trigger the
             next generation (a known Gemini Live edge case).
             """
-            watchdog_sec = _get_float_env("AGENT_RESPONSE_WATCHDOG_SEC", 6.0)
+            watchdog_sec = _get_float_env("AGENT_RESPONSE_WATCHDOG_SEC", 4.0)
             try:
                 while True:
                     await asyncio.sleep(1.0)
