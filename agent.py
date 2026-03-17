@@ -327,9 +327,15 @@ _CARRIER_PHRASES: frozenset[str] = frozenset([
     "this call is being recorded",
     "call is being recorded",
     "call may be recorded",
+    "we are going to",
+    "we are going to record",
+    "we will be recording",
+    "this call will be recorded",
+    "call is recorded",
     "yah call record ki ja rahi hai",
     "yeh call record ki ja rahi hai",
     "is call ko record kiya ja raha hai",
+    "is call ki recording",
 ])
 
 
@@ -1148,25 +1154,15 @@ async def entrypoint(ctx: agents.JobContext):
             if _carrier_detected_at[0] == 0.0:
                 _carrier_detected_at[0] = time.time()
             logger.info("STT noise token '%s' — ignoring for speech timers.", transcript)
-            # Interrupt any Gemini generation triggered by the noise audio.
-            # With client-side VAD, the VAD may have signalled activityStart for
-            # this noise burst; interrupting here prevents a spurious response.
-            if getattr(ev, "is_final", False):
-                try:
-                    session.interrupt()
-                except Exception:
-                    pass
+            # Do NOT interrupt here — calling session.interrupt() on noise events
+            # disrupts Gemini's server-side VAD state and causes generation timeouts.
             return
         if _is_carrier_announcement(transcript):
             if _carrier_detected_at[0] == 0.0:
                 _carrier_detected_at[0] = time.time()
             logger.info("Carrier announcement detected — ignoring for speech timers.")
-            if getattr(ev, "is_final", False):
-                # Kill any Gemini response to the carrier announcement.
-                try:
-                    session.interrupt()
-                except Exception:
-                    pass
+            # Do NOT interrupt here — calling session.interrupt() on carrier events
+            # disrupts Gemini's server-side VAD state and causes generation timeouts.
             return
 
         # Only count the utterance as real user speech once the STT has produced
@@ -1296,12 +1292,15 @@ async def entrypoint(ctx: agents.JobContext):
                         _last_agent_response_at[0] = now  # prevent re-trigger while recovering
                         try:
                             if realtime_audio:
+                                # For Gemini server-side VAD: interrupt to clear stuck state,
+                                # wait long enough for Gemini to fully reset, then generate_reply.
+                                # Longer interrupt wait (1.5s vs 0.4s) reduces chance of racing
+                                # with an in-progress auto-generation and causing a 5s timeout.
                                 session.interrupt()
-                                await asyncio.sleep(0.4)
+                                await asyncio.sleep(1.5)
                             await session.generate_reply(
                                 instructions="Respond naturally to what the user just said.",
                                 allow_interruptions=True,
-                                input_modality="text",
                             )
                         except Exception as wd_err:
                             logger.debug("Watchdog generate_reply failed: %s", wd_err)
@@ -1435,7 +1434,11 @@ async def entrypoint(ctx: agents.JobContext):
                             await asyncio.sleep(1.5)
 
             # Reset silence timer so reprompt is measured from greeting end.
+            # Also reset agent-response tracker so the watchdog doesn't fire
+            # during greeting playback (session.say() is TTS and conversation_item_added
+            # may not fire for several seconds while audio is in-flight).
             last_user_speech_at = time.time()
+            _last_agent_response_at[0] = time.time()
             reprompt_task = asyncio.create_task(_reprompt_if_no_speech())
             asyncio.ensure_future(_watchdog_agent_response())
 
