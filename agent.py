@@ -1079,7 +1079,7 @@ async def entrypoint(ctx: agents.JobContext):
         playing and for the user to respond, preventing the reprompt from
         racing with the greeting and corrupting Gemini session state.
         """
-        delay = _get_float_env("NO_SPEECH_REPROMPT_SEC", 12.0)
+        delay = _get_float_env("NO_SPEECH_REPROMPT_SEC", 7.0)
         reprompt_text = _default_reprompt(_get_default_language())
         try:
             while True:
