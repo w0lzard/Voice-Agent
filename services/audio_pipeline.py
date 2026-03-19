@@ -87,8 +87,10 @@ def build_vad():
     """
     try:
         from livekit.plugins import silero
-        vad = silero.VAD.load()
-        logger.info("VAD: Silero loaded")
+        # VAD is ultra-over-sensitive to Indian PSTN noise, holding turn state for 6+ seconds.
+        # We crank up activation_threshold so it only triggers on real, confident human speech.
+        vad = silero.VAD.load(activation_threshold=0.8, min_speech_duration=0.15)
+        logger.info("VAD: Silero loaded with threshold=0.8")
         return vad
     except Exception as exc:
         logger.warning("Silero VAD not available (%s) — using None", exc)
