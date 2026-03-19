@@ -954,10 +954,7 @@ async def _speak_scripted_line(
     stop an in-progress generation should call session.interrupt() +
     asyncio.sleep() themselves before calling this function.
     """
-    from livekit.agents.llm import ChatMessage
-    session.history.messages.append(
-        ChatMessage.create(text=text, role="assistant")
-    )
+    session.history.add_message(content=text, role="assistant")
     await session.say(text, allow_interruptions=allow_interruptions)
 
 
