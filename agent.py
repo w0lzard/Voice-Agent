@@ -95,71 +95,151 @@ if _SCRIPTS_DIR.exists():
     AGENT_SCRIPT: str = _ns["AGENT_SCRIPT"]
 else:
     # Fallback: inline copy so the agent still starts if the file is missing.
+    # Keep this in sync with scripts/agent_script.py.
     AGENT_SCRIPT = """
 You are {agent_name}, a polite and professional real estate calling assistant from {company}.
 
-Follow this conversation flow naturally and ask only one question at a time.
-Respond in whichever language the caller uses — Hindi, English, or Hinglish.
+═══════════════════════════════════════════════════════════
+CRITICAL RULES — read these before every reply
+═══════════════════════════════════════════════════════════
 
-CALL FLOW:
+RULE 1 — NOISE FILTERING (most important rule):
+Telephone calls from India produce carrier line artefacts. These are NOT user
+speech. Produce ZERO output for any of the following — no filler word, no
+acknowledgment, no question. Absolute silence. Continue as if that turn
+never happened.
 
-Step 1 — Opening (say this first):
-  English: "Hello, my name is {agent_name}, and I am calling from {company}. Is this a good time to talk?"
-  Hindi:   "Namaste, mera naam {agent_name} hai aur main {company} se bol rahi hoon. Kya abhi baat karna theek rahega?"
+Noise type A — marker tokens (always noise, regardless of surrounding text):
+  <noise>   <crosstalk>   <inaudible>   <silence>
 
-Step 2 — If caller says YES, ask:
-  English: "Great! What kind of property are you looking for?"
+Noise type B — punctuation-only turns (no letters or digits at all):
+  "."   ".."   "..."   "!"   "?"   or any turn containing zero letters/digits.
+
+Noise type C — wrong-script tokens (carrier audio transcribed as foreign text):
+  Bengali, Telugu, Tamil, Thai, Malayalam, Kannada, Cyrillic, Arabic.
+  If a user turn contains ONLY characters from one of these scripts, ignore it.
+
+Noise type D — carrier announcements (automated recordings, not the caller):
+  Short phrases like "टाइम ऑन टाइम", "this call is being recorded",
+  "please hold", or similar automated messages. Ignore silently.
+
+ALLOWED scripts (real user speech to respond to):
+  Devanagari (Hindi): नमस्ते   हाँ   ठीक है
+  Latin (English / Hinglish): "okay haan"   "yes"   "flat chahiye"
+
+RULE 2 — CONVERSATION MEMORY (never re-ask):
+You MUST remember everything the caller has said in this conversation.
+Track what has been confirmed:
+  • If caller said ANYTHING after the greeting (even just "Hello", "Haan", "Ji",
+    "Yes", "Okay") → availability is confirmed, do NOT ask again, go to Step 2
+  • If caller gave property type → do NOT ask again, move to Step 3
+  • If caller gave location → do NOT ask again, move to Step 4
+  • If caller gave budget → do NOT ask again, move to Step 5
+
+RULE 3 — ONE QUESTION PER REPLY:
+Ask only one question at a time. Never combine two questions.
+
+RULE 4 — SHORT REPLIES:
+Every reply must be 1-2 short sentences. This is a phone call.
+
+RULE 5 — LANGUAGE:
+Default language: Hindi or Hinglish (Hindi + English mix). Always start and stay
+in Hindi/Hinglish unless the caller speaks multiple full English sentences in a row.
+A single English word or short phrase like "Hello", "Yes", "Okay", "fine", "good"
+does NOT mean the caller wants English — respond in Hindi/Hinglish.
+Only switch fully to English if the caller speaks 2+ consecutive full English sentences.
+Occasionally use a natural filler word to start a reply (e.g. "Achha," "Bilkul,")
+but do NOT force it on every response — it sounds robotic.
+
+RULE 6 — IDENTITY:
+NEVER say you are an AI, bot, or virtual assistant.
+You are {agent_name}, a real person from {company}.
+
+RULE 7 — CLARIFICATION (only for genuinely unclear real speech):
+Only ask "Aap thoda dobara bol sakte hain?" if the caller's Hindi/English
+utterance was genuinely inaudible. NEVER ask this for noise-type tokens.
+After asking clarification ONCE, wait for the caller to respond before doing
+anything else — do NOT auto-advance to the next step on noise/silence.
+If clarification is asked and the caller's next response is ALSO noise or
+inaudible, do NOT ask again. Return silently to waiting for a real answer
+to the original question.
+
+RULE 8 — NO REPEAT GREETING:
+The system delivers the Step 1 greeting. If the caller speaks BEFORE or DURING
+the greeting (you see a user message while you were supposed to be saying Step 1),
+that is an interruption. Do NOT repeat "Namaste". Ask ONLY:
+  "Kya abhi aapka thoda time hai?" and wait.
+If the caller speaks AFTER the greeting is done (greeting is in your history),
+treat their response per Step 2.
+  • Never jump to Step 2 without the caller having answered the availability question.
+
+RULE 9 — NEVER ADVANCE ON NOISE:
+Only move to the next step when the caller gives a clear, real answer.
+Noise tokens, marker tokens, punctuation-only turns, and silence do NOT count
+as answers. If only noise arrives after a question, stay on that question and
+wait silently. Do not re-ask the question either — just wait.
+
+RULE 10 — CALL CLOSE:
+After Step 6, if the caller has no more questions, say a warm goodbye:
+  "Bahut bahut dhanyavaad! Aapka din shubh ho. Namaste!"
+Then the call ends. Do NOT continue asking questions after Step 6.
+
+═══════════════════════════════════════════════════════════
+CALL FLOW — follow steps in order
+═══════════════════════════════════════════════════════════
+
+Step 1 — Opening greeting (say WORD FOR WORD, in Hindi):
+  "Namaste, mera naam {agent_name} hai aur main {company} se bol rahi hoon. Kya abhi aapka thoda time hai?"
+
+Step 2 — After caller answers "Kya abhi aapka thoda time hai?" with YES:
+  Any positive answer ("Haan", "Ji", "Ha", "Yes", "Okay", "Hello", "Fine", "Bol",
+  "Boliye", or any similar positive/neutral response) = YES, move to:
   Hindi:   "Bahut achha! Aap kaise property mein interested hain?"
+  English: "Great! What kind of property are you looking for?"
+  Only if caller EXPLICITLY says "abhi nahi", "baad mein", "busy hoon", or "not now":
+  → "Koi baat nahi. Main aapko kab call back kar sakti hoon?"
 
-Step 3 — If caller says NO, ask:
-  English: "No problem. When would be a good time to call you back?"
-  Hindi:   "Koi baat nahi. Main aapko kab call kar sakti hoon?"
+Step 3 — After property type is given, ask location:
+  Hindi:   "Achha, aap kaunse city ya area mein property dhundh rahe hain?"
+  English: "Got it. Which city or area are you looking in?"
 
-Step 4 — After getting property type, ask these one by one:
-  - Which city or location are you looking for?
-  - What is your approximate budget?
-  - Do you want a flat, villa, plot, or commercial space?
+Step 4 — After location is given, ask budget:
+  Hindi:   "Theek hai, aur aapka approximate budget kya hai?"
+  English: "Sure, and what is your approximate budget?"
 
-Step 5 — If caller provides all details:
-  English: "Thank you! I will share suitable property options with you shortly."
-  Hindi:   "Dhanyavaad! Main aapko jald hi suitable options share karungi."
+Step 5 — After budget is given, ask sub-type:
+  Hindi:   "Bilkul. Flat, villa, plot, ya commercial space — kya prefer karenge?"
+  English: "Right. Would you prefer a flat, villa, plot, or commercial space?"
 
-Step 6 — If caller is not interested:
-  English: "Understood, thank you for your time. Have a great day!"
-  Hindi:   "Theek hai, aapka samay dene ke liye shukriya. Dhanyavaad!"
+Step 6 — After all details collected:
+  Say: "Dhanyavaad! Main aapko jald hi suitable property options share karungi."
+  Then wait for caller to say anything. If they have a question, answer it briefly.
+  Then say: "Bahut bahut dhanyavaad aapka! Aapka din shubh ho. Namaste!"
+  End the call (per RULE 10).
 
-CONVERSATION RULES:
-- Ask only ONE question per turn.
-- Keep every reply to 1-2 short sentences — this is a phone call.
-- Mirror the caller's language automatically.
-- NEVER say you are an AI or a bot — you are {agent_name}, a real person.
-- If caller says something unclear, ask to repeat rather than guess.
+Step 7 — If not interested at any point:
+  "Theek hai, aapka samay dene ke liye shukriya. Aapka din shubh rahe!"
+  Then end the call (per RULE 10).
 
-FILLER WORDS — MANDATORY (every reply must start with one, except the opening greeting):
-  Hindi:   "Haan ji," / "Achha," / "Bilkul," / "Theek hai," / "Hmm..."
-  English: "Right," / "Got it," / "Sure," / "I see," / "Hmm..."
-  BAD:  "Aap kya chahte hain?"
-  GOOD: "Achha, aap kya chahte hain?"
-  RESPOND IMMEDIATELY when the user pauses — do not wait to see if they continue.
+═══════════════════════════════════════════════════════════
+FILLER WORDS (optional — use naturally, not on every reply)
+═══════════════════════════════════════════════════════════
+  Hindi:   "Haan ji," / "Achha," / "Bilkul," / "Theek hai,"
+  English: "Right," / "Got it," / "Sure," / "I see,"
 
-TRANSFER: Use transfer_call ONLY if caller clearly says "transfer me" or "connect to agent". Never on short, noisy, or ambiguous input.
+TRANSFER: Use transfer_call ONLY if caller clearly says "transfer me" or
+"connect me to an agent". Never transfer on noisy or ambiguous input.
 """
 
 from livekit import agents, api
 from livekit.agents import AgentSession, Agent
 from livekit.agents.voice.room_io import RoomOptions, AudioInputOptions
 from livekit.plugins import (
-    google,
+    openai as lk_openai,
     noise_cancellation,
 )
 from livekit.agents import llm
 from typing import Optional
-
-try:
-    from google.genai import types as google_genai_types
-    _HAS_GOOGLE_GENAI_TYPES = True
-except ImportError:
-    _HAS_GOOGLE_GENAI_TYPES = False
 
 # Load environment variables
 def load_environment() -> None:
@@ -257,9 +337,9 @@ def _get_realtime_language_code() -> str:
 
 
 def _validate_runtime_provider_keys() -> bool:
-    google_key = os.getenv("GOOGLE_API_KEY", "").strip()
-    if not google_key:
-        logger.error("GOOGLE_API_KEY is missing in environment. Cannot start Gemini Live conversation.")
+    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+    if not openai_key:
+        logger.error("OPENAI_API_KEY is missing in environment. Cannot start OpenAI Realtime conversation.")
         return False
     return True
 
@@ -568,48 +648,20 @@ async def _resolve_outbound_trunk_id(ctx: agents.JobContext, configured: str | N
 
 
 def _build_realtime_llm():
-    """Configure Gemini Live realtime audio model."""
-    model = os.getenv("GOOGLE_REALTIME_MODEL", "gemini-2.5-flash-native-audio-preview-12-2025")
-    voice = os.getenv("GOOGLE_REALTIME_VOICE", "Kore")
+    """Configure OpenAI Realtime audio model (STT + LLM + TTS in one)."""
+    model = os.getenv("OPENAI_REALTIME_MODEL", "gpt-4o-mini-realtime-preview")
+    # shimmer = warm feminine voice; other options: coral, nova, alloy, echo, ash, sage, verse
+    voice = os.getenv("OPENAI_TTS_VOICE", "shimmer")
     logger.info(
-        "Using Gemini Live audio (model=%s voice=%s language=%s)",
+        "Using OpenAI Realtime audio (model=%s voice=%s)",
         model,
         voice,
-        _get_realtime_language_code(),
     )
-    extra_kwargs: dict = {}
-    if _HAS_GOOGLE_GENAI_TYPES:
-        extra_kwargs["realtime_input_config"] = google_genai_types.RealtimeInputConfig(
-            automatic_activity_detection=google_genai_types.AutomaticActivityDetection(
-                disabled=False,
-                # Finalize the user's turn after 600ms of silence (default ~2000ms).
-                # On noisy Indian carrier lines the normal 2s window causes 5-10s
-                # STT finalization delays because carrier noise keeps resetting it.
-                silence_duration_ms=_get_int_env("GEMINI_SILENCE_DURATION_MS", 600),
-                # Small prefix padding so leading syllables aren't clipped.
-                prefix_padding_ms=_get_int_env("GEMINI_PREFIX_PADDING_MS", 100),
-            ),
-            # NO_INTERRUPTION: Gemini finishes its full sentence before processing
-            # new user input. START_OF_ACTIVITY_INTERRUPTS causes Gemini to pause
-            # on carrier noise, then wait for the "end of activity" signal — which
-            # never comes cleanly on noisy Indian carrier lines, producing 5-10s
-            # STT finalization delays and fragmented agent responses.
-            activity_handling=google_genai_types.ActivityHandling.NO_INTERRUPTION,
-        )
-        extra_kwargs["input_audio_transcription"] = google_genai_types.AudioTranscriptionConfig()
-        extra_kwargs["enable_affective_dialog"] = True
-
-    max_tokens = _get_int_env("GOOGLE_REALTIME_MAX_OUTPUT_TOKENS", 0)
-    if max_tokens > 0:
-        extra_kwargs["max_output_tokens"] = max_tokens
-
-    return google.realtime.RealtimeModel(
+    return lk_openai.realtime.RealtimeModel(
         model=model,
         voice=voice,
-        language=_get_realtime_language_code(),
-        temperature=_get_float_env("GOOGLE_REALTIME_TEMPERATURE", 0.7),
+        temperature=_get_float_env("OPENAI_REALTIME_TEMPERATURE", 0.7),
         instructions=_build_agent_instructions(),
-        **extra_kwargs,
     )
 
 
@@ -1037,14 +1089,24 @@ async def entrypoint(ctx: agents.JobContext):
         await start_task
         return None
 
-    resolved_trunk_id = await _start_session_and_resolve_trunk()
+    resolved_trunk_id = None
+    for _attempt in range(2):
+        try:
+            resolved_trunk_id = await _start_session_and_resolve_trunk()
+            break
+        except Exception as e:
+            logger.error("session.start() failed (attempt %d): %s", _attempt + 1, e)
+            if _attempt == 0:
+                await asyncio.sleep(2.0)
+            else:
+                ctx.shutdown()
+                return
     _session_ready_at = time.time()
 
-    # session.start() causes Gemini to auto-trigger _realtime_reply_task immediately
-    # (it sees a system prompt and assumes it should speak). That auto-task times out
-    # and permanently corrupts the generation tracker. Cancel it right away.
-    # Cancel any auto-generation Gemini triggers immediately after session.start()
-    # to prevent a stale _realtime_reply_task from corrupting the generation tracker.
+    # Wait for the WebSocket to fully settle, then cancel any auto-generated
+    # response the model may have triggered on session.start() — we want the
+    # greeting to be delivered explicitly via generate_reply() below.
+    await asyncio.sleep(0.5)
     try:
         session.interrupt()
     except Exception:
@@ -1287,10 +1349,14 @@ async def entrypoint(ctx: agents.JobContext):
             # greeting.  Gemini processes carrier-as-user-turn in <100ms, so 0.8s
             # is enough safety margin without adding noticeable latency.
             carrier_tail = _get_float_env("CARRIER_TAIL_SEC", 0.8)
+            # Hard ceiling on the carrier wait so continuous Indian carrier
+            # noise can't push carrier_done_at forward indefinitely (20-30 s bug).
+            carrier_max_wait = _get_float_env("CARRIER_MAX_WAIT_SEC", 8.0)
 
             gemini_ready_at = _entrypoint_start_at + warmup_sec
             answered_at = _call_answered_at[0] or time.time()
             carrier_done_at = answered_at + carrier_wait  # static fallback
+            carrier_absolute_deadline = answered_at + carrier_max_wait
 
             user_spoke_before_greeting = False
             while True:
@@ -1300,6 +1366,15 @@ async def entrypoint(ctx: agents.JobContext):
                 if now < gemini_ready_at:        # always wait for Gemini first
                     await asyncio.sleep(0.1)
                     continue
+
+                # Hard cap: never wait longer than carrier_absolute_deadline,
+                # regardless of ongoing noise.
+                if now >= carrier_absolute_deadline:
+                    logger.info(
+                        "Carrier max wait (%.1fs) elapsed — firing greeting despite ongoing noise.",
+                        carrier_max_wait,
+                    )
+                    break
 
                 # Dynamic carrier_done_at: extend the deadline every time new
                 # carrier/noise audio is detected, so the greeting never fires
@@ -1312,7 +1387,7 @@ async def entrypoint(ctx: agents.JobContext):
                     carrier_done_at = max(carrier_done_at, dynamic_done)
 
                 user_spoke_before_greeting = last_user_speech_at > answered_at
-                if user_spoke_before_greeting:   # skip carrier wait — user is live
+                if user_spoke_before_greeting:   # user is live — exit loop
                     logger.debug("User spoke during carrier wait — firing greeting immediately.")
                     break
                 if now >= carrier_done_at:       # carrier window elapsed
@@ -1324,35 +1399,45 @@ async def entrypoint(ctx: agents.JobContext):
 
             if user_spoke_before_greeting:
                 # User spoke before the greeting window elapsed.
-                # Gemini's server-side turn detection already started a natural
-                # response to their speech.  Calling generate_reply() here would
-                # race with that in-progress generation, time out after 5 s, and
-                # permanently corrupt Gemini's turn-detection state machine.
-                # → Skip the scripted greeting entirely; Gemini handles it.
+                # Gemini may have started a natural VAD response — interrupt it
+                # so the scripted greeting doesn't race with an in-progress
+                # generation (which previously caused the agent to skip the
+                # intro and only say the availability question).
                 logger.info(
-                    "User spoke before greeting — letting Gemini respond naturally."
+                    "User spoke before greeting — interrupting Gemini VAD and firing scripted greeting."
                 )
+                try:
+                    session.interrupt()
+                except Exception:
+                    pass
+                await asyncio.sleep(0.3)  # let Gemini settle after interrupt
+
+            # Fire greeting unconditionally (always — regardless of user_spoke_before_greeting).
+            # One retry on transient failure.
+            for _attempt in range(2):
+                if _call_failed.is_set():
+                    logger.info("Greeting aborted mid-retry: SIP call failed.")
+                    return
+                try:
+                    await _speak_scripted_line(
+                        session,
+                        text=first_message,
+                    )
+                    logger.info("Initial greeting sent.")
+                    break
+                except asyncio.CancelledError:
+                    raise
+                except Exception as greet_error:
+                    logger.warning(
+                        "Greeting attempt %d failed: %s", _attempt + 1, greet_error
+                    )
+                    if _attempt == 0:
+                        await asyncio.sleep(1.5)
             else:
-                # Fire greeting. One retry on transient failure.
-                for _attempt in range(2):
-                    if _call_failed.is_set():
-                        logger.info("Greeting aborted mid-retry: SIP call failed.")
-                        return
-                    try:
-                        await _speak_scripted_line(
-                            session,
-                            text=first_message,
-                        )
-                        logger.info("Initial greeting sent.")
-                        break
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as greet_error:
-                        logger.warning(
-                            "Greeting attempt %d failed: %s", _attempt + 1, greet_error
-                        )
-                        if _attempt == 0:
-                            await asyncio.sleep(1.5)
+                logger.error(
+                    "Greeting failed after 2 attempts — caller will hear silence. "
+                    "Check Gemini WebSocket connectivity."
+                )
 
             # Reset silence timer so reprompt is measured from greeting end.
             # Also reset agent-response tracker so the watchdog doesn't fire
