@@ -1311,6 +1311,18 @@ async def entrypoint(ctx: agents.JobContext):
             reprompt_task = None
         fnc_ctx.set_last_user_utterance(transcript)
 
+        if _pipeline_mode:
+            # Force immediate reply generation based purely on Deepgram STT endpointing.
+            # This completely bypasses Silero VAD which often hangs for 6+ seconds 
+            # due to static noise on PSTN SIP trunks.
+            logger.debug(f"Deepgram is_final triggered. Forcing immediate generate_reply().")
+            try:
+                # Cancel the current slow generation turn and start immediately
+                session.interrupt()
+            except Exception:
+                pass
+            asyncio.ensure_future(session.generate_reply())
+
         # ── Layer 3 latency tracking: STT end → LLM start ─────────────────
         call_id = ctx.room.name
         if _HAS_LATENCY:
