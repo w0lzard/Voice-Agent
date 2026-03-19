@@ -64,7 +64,7 @@ class PrerecordedLayer:
         clips:       Optional[dict[str, str]] = None,
         speaker:     str = "anushka",
         language:    str = "hi-IN",
-        model:       str = "bulbul:v1",
+        model:       str = "bulbul:v2",
         sample_rate: int = _SAMPLE_RATE,
     ):
         self._clips       = clips or DEFAULT_CLIPS

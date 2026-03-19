@@ -225,7 +225,7 @@ class SarvamTTS(tts.TTS):
         *,
         api_key:  Optional[str] = None,
         speaker:  str = "anushka",
-        model:    str = "bulbul:v1",
+        model:    str = "bulbul:v2",
         language: str = "hi-IN",
     ) -> None:
         super().__init__(
@@ -278,7 +278,7 @@ async def warm_cache(clips: dict[str, str], *, api_key: str, speaker: str = "anu
     Call once during prewarm() to eliminate cold-start TTS latency.
     """
     tasks = [
-        _fetch_audio(text, api_key=api_key, speaker=speaker, model="bulbul:v1", language=language)
+        _fetch_audio(text, api_key=api_key, speaker=speaker, model="bulbul:v2", language=language)
         for text in clips.values()
     ]
     results = await asyncio.gather(*tasks, return_exceptions=True)
