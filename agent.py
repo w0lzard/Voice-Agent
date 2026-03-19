@@ -7,6 +7,13 @@ import tempfile
 import threading
 from pathlib import Path
 from dotenv import load_dotenv
+import aiohttp
+
+# ── Load .env immediately — layer singletons read env vars at import time ─────
+_root_dir = Path(__file__).resolve().parent
+for _ep in (_root_dir / "backend" / ".env.local", _root_dir / ".env.local", _root_dir / ".env"):
+    if _ep.exists():
+        load_dotenv(_ep, override=True)
 
 # ── 3-Layer speech architecture ───────────────────────────────────────────────
 try:
@@ -260,8 +267,26 @@ from livekit.plugins import (
     openai as lk_openai,
     noise_cancellation,
 )
+# Register Deepgram + Silero on the main thread (livekit-agents requirement).
+try:
+    from livekit.plugins import deepgram as _lk_deepgram  # noqa: F401
+    from livekit.plugins import silero as _lk_silero      # noqa: F401
+except ImportError:
+    pass
 from livekit.agents import llm
 from typing import Optional
+
+# ── Pipeline services (Deepgram STT + Sarvam TTS) ─────────────────────────────
+try:
+    from services.sarvam_tts import SarvamTTS
+    from services.audio_pipeline import build_pipeline
+    _HAS_PIPELINE_SERVICES = True
+except ImportError as _pipeline_err:
+    _HAS_PIPELINE_SERVICES = False
+    logging.getLogger("outbound-agent").warning(
+        "Pipeline services not available (%s). Falling back to OpenAI Realtime.",
+        _pipeline_err,
+    )
 
 # Load environment variables
 def load_environment() -> None:
@@ -359,11 +384,21 @@ def _get_realtime_language_code() -> str:
 
 
 def _validate_runtime_provider_keys() -> bool:
-    openai_key = os.getenv("OPENAI_API_KEY", "").strip()
+    ok = True
+    openai_key  = os.getenv("OPENAI_API_KEY",  "").strip()
+    deepgram_key = os.getenv("DEEPGRAM_API_KEY", "").strip()
+    sarvam_key   = os.getenv("SARVAM_API_KEY",   "").strip()
+
     if not openai_key:
-        logger.error("OPENAI_API_KEY is missing in environment. Cannot start OpenAI Realtime conversation.")
-        return False
-    return True
+        logger.error("OPENAI_API_KEY is missing — LLM will fail.")
+        ok = False
+    if not deepgram_key:
+        logger.warning("DEEPGRAM_API_KEY is missing — STT will fail.")
+        ok = False
+    if not sarvam_key:
+        logger.warning("SARVAM_API_KEY is missing — TTS will fail.")
+        ok = False
+    return ok
 
 
 def _repair_mojibake(value: str | None) -> str | None:
@@ -669,16 +704,35 @@ async def _resolve_outbound_trunk_id(ctx: agents.JobContext, configured: str | N
 
 
 
-def _build_realtime_llm():
-    """Configure OpenAI Realtime audio model (STT + LLM + TTS in one)."""
-    model = os.getenv("OPENAI_REALTIME_MODEL", "gpt-4o-mini-realtime-preview")
-    # shimmer = warm feminine voice; other options: coral, nova, alloy, echo, ash, sage, verse
-    voice = os.getenv("OPENAI_TTS_VOICE", "shimmer")
+def _build_pipeline_components():
+    """
+    Build STT (Deepgram) + LLM (OpenAI) + TTS (Sarvam) + VAD (Silero).
+
+    Returns (stt, llm, tts, vad).  Falls back to OpenAI Realtime if
+    pipeline services are not installed.
+    """
+    if not _HAS_PIPELINE_SERVICES:
+        logger.warning("Falling back to OpenAI Realtime (pipeline services unavailable).")
+        return _build_realtime_fallback(), None, None, None
+
+    lang = _get_default_language()
+    # Map hi → hi-IN, en → en-IN for Sarvam
+    sarvam_lang = {"hi": "hi-IN", "en": "en-IN"}.get(lang, "hi-IN")
+
+    stt, llm_inst, tts, vad = build_pipeline(language=lang, speaker="anushka")
     logger.info(
-        "Using OpenAI Realtime audio (model=%s voice=%s)",
-        model,
-        voice,
+        "Pipeline: Deepgram STT (%s) | OpenAI LLM | Sarvam TTS (%s)",
+        lang,
+        sarvam_lang,
     )
+    return stt, llm_inst, tts, vad
+
+
+def _build_realtime_fallback():
+    """OpenAI Realtime fallback (used only when pipeline services are missing)."""
+    model = os.getenv("OPENAI_REALTIME_MODEL", "gpt-4o-mini-realtime-preview")
+    voice = os.getenv("OPENAI_TTS_VOICE", "shimmer")
+    logger.info("Fallback: OpenAI Realtime (model=%s voice=%s)", model, voice)
     return lk_openai.realtime.RealtimeModel(
         model=model,
         voice=voice,
@@ -876,7 +930,12 @@ def prewarm(proc: agents.JobProcess) -> None:
     # Pre-generate greeting/filler audio clips at process startup (Layer 1).
     # This runs once per worker process so the first call has zero TTS latency.
     if _HAS_LAYERS:
-        asyncio.get_event_loop().run_until_complete(_layer1.preload())
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(_layer1.preload())
+        finally:
+            loop.close()
 
 
 async def _speak_scripted_line(
@@ -885,22 +944,35 @@ async def _speak_scripted_line(
     text: str,
     allow_interruptions: bool = True,
 ) -> None:
-    """Ask Gemini Live to speak a scripted line using its native audio.
-
-    We use generate_reply() with an explicit instruction so Gemini speaks
-    the line in its own voice — no separate TTS provider required.
-
-    NOTE: Do NOT call session.interrupt() here. Sending a cancel signal to
-    Gemini Live right before generate_reply() causes Gemini to stay in a
-    cancelled/transitional state for ~5 s, making generate_reply() time out
-    every first attempt. Callers that need to stop an in-progress generation
-    should call session.interrupt() + asyncio.sleep() themselves before
-    calling this function.
     """
-    await session.generate_reply(
-        instructions=f"Say exactly the following and nothing else: {text}",
-        allow_interruptions=allow_interruptions,
-    )
+    Speak a scripted line directly via the TTS pipeline (bypasses LLM).
+
+    In pipeline mode (Deepgram+Sarvam), session.say() converts text to Sarvam
+    audio immediately — no LLM round-trip, sub-200 ms latency for pre-cached phrases.
+
+    NOTE: Do NOT call session.interrupt() before this. Callers that need to
+    stop an in-progress generation should call session.interrupt() +
+    asyncio.sleep() themselves before calling this function.
+    """
+    await session.say(text, allow_interruptions=allow_interruptions)
+
+
+async def _broadcast_interim(transcript: str, call_id: str) -> None:
+    """Fire-and-forget POST of an interim (partial) Deepgram transcript to ws_server."""
+    try:
+        async with aiohttp.ClientSession() as _s:
+            await _s.post(
+                "http://localhost:8090/event",
+                json={
+                    "type":       "transcript_interim",
+                    "transcript": transcript,
+                    "call_id":    call_id,
+                    "timestamp":  time.time(),
+                },
+                timeout=aiohttp.ClientTimeout(total=0.5),
+            )
+    except Exception:
+        pass
 
 
 async def _reject_busy_inbound(ctx: agents.JobContext) -> None:
@@ -916,20 +988,25 @@ async def _reject_busy_inbound(ctx: agents.JobContext) -> None:
         "Please try calling again in a few minutes. Thank you!"
     )
     try:
-        busy_session = AgentSession(
-            llm=_build_realtime_llm(),
-            turn_detection="realtime_llm",
+        _b_stt, _b_llm, _b_tts, _b_vad = _build_pipeline_components()
+        _b_kwargs: dict = dict(
+            tools=[],
+            allow_interruptions=False,
         )
+        if _b_stt is not None:
+            _b_kwargs.update(stt=_b_stt, llm=_b_llm, tts=_b_tts)
+            if _b_vad is not None:
+                _b_kwargs["vad"] = _b_vad
+        else:
+            _b_kwargs.update(llm=_b_stt, turn_detection="realtime_llm")
+        busy_session = AgentSession(**_b_kwargs)
         await busy_session.start(
             room=ctx.room,
             agent=OutboundAssistant(),
             room_options=RoomOptions(close_on_disconnect=True),
         )
-        await busy_session.generate_reply(
-            instructions=f"Say exactly the following message and nothing else: {busy_text}",
-            allow_interruptions=False,
-        )
-        await asyncio.sleep(4.0)  # wait for Gemini audio to finish before disconnect
+        await busy_session.say(busy_text, allow_interruptions=False)
+        await asyncio.sleep(4.0)
     except Exception as e:
         logger.warning("Busy-message session failed: %s", e)
     finally:
@@ -969,19 +1046,21 @@ async def _reject_busy_outbound(ctx: agents.JobContext, phone_number: str) -> No
             ),
             timeout=45,
         )
-        busy_session = AgentSession(
-            llm=_build_realtime_llm(),
-            turn_detection="realtime_llm",
-        )
+        _ob_stt, _ob_llm, _ob_tts, _ob_vad = _build_pipeline_components()
+        _ob_kwargs: dict = dict(tools=[], allow_interruptions=False)
+        if _ob_stt is not None:
+            _ob_kwargs.update(stt=_ob_stt, llm=_ob_llm, tts=_ob_tts)
+            if _ob_vad is not None:
+                _ob_kwargs["vad"] = _ob_vad
+        else:
+            _ob_kwargs.update(llm=_ob_stt, turn_detection="realtime_llm")
+        busy_session = AgentSession(**_ob_kwargs)
         await busy_session.start(
             room=ctx.room,
             agent=OutboundAssistant(),
             room_options=RoomOptions(close_on_disconnect=True),
         )
-        await busy_session.generate_reply(
-            instructions=f"Say exactly the following message and nothing else: {busy_text}",
-            allow_interruptions=False,
-        )
+        await busy_session.say(busy_text, allow_interruptions=False)
         await asyncio.sleep(5.0)
     except Exception as e:
         logger.warning("Outbound busy-message failed: %s", e)
@@ -1065,19 +1144,39 @@ async def entrypoint(ctx: agents.JobContext):
     _carrier_detected_at: list[float] = [0.0]
     reprompt_task: asyncio.Task | None = None
 
-    # Initialize Gemini Live session.
-    # No separate TTS or VAD — Gemini Live handles all audio natively.
-    # Scripted lines (greeting, reprompt) use generate_reply() directly.
-    session = AgentSession(
-        llm=_build_realtime_llm(),
-        tools=fnc_ctx.flatten(),
-        turn_detection="realtime_llm",
-        allow_interruptions=True,
-        min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.10),
-        max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.30),
-        false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 1.20),
-        user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
-    )
+    # ── Build pipeline: Deepgram STT + OpenAI LLM + Sarvam TTS + Silero VAD ──
+    _stt, _llm, _tts, _vad = _build_pipeline_components()
+
+    _pipeline_mode = _stt is not None  # True = Deepgram+Sarvam; False = Realtime fallback
+
+    if _pipeline_mode:
+        logger.info("Starting pipeline session: Deepgram STT | OpenAI LLM | Sarvam TTS")
+        _session_kwargs: dict = dict(
+            stt=_stt,
+            llm=_llm,
+            tts=_tts,
+            tools=fnc_ctx.flatten(),
+            allow_interruptions=True,
+            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.10),
+            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.30),
+            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 1.20),
+            user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
+        )
+        if _vad is not None:
+            _session_kwargs["vad"] = _vad
+        session = AgentSession(**_session_kwargs)
+    else:
+        logger.info("Starting realtime fallback session: OpenAI Realtime")
+        session = AgentSession(
+            llm=_stt,  # _stt holds the realtime model in fallback path
+            tools=fnc_ctx.flatten(),
+            turn_detection="realtime_llm",
+            allow_interruptions=True,
+            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.10),
+            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.30),
+            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 1.20),
+            user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
+        )
 
     # Pre-resolve greeting and trunk ID concurrently while Gemini WebSocket is connecting.
     # This hides lookup latency inside session.start() so dialing begins the moment
@@ -1143,32 +1242,38 @@ async def entrypoint(ctx: agents.JobContext):
         transcript = (getattr(ev, "transcript", "") or "").strip()
         if not transcript:
             return
+        is_final = getattr(ev, "is_final", False)
         logger.info(
             "user_input_transcribed final=%s language=%s text=\"%s\"",
-            getattr(ev, "is_final", False),
+            is_final,
             getattr(ev, "language", None),
             _safe_log_text(transcript),
         )
+
+        # ── Broadcast interim transcript for debug dashboard ─────────────────
+        if not is_final:
+            asyncio.ensure_future(_broadcast_interim(transcript, ctx.room.name))
+
         # Filter telephony noise — neither carrier announcements nor STT noise
         # tokens (e.g. "<noise>", "<crosstalk>") are real user speech.
         if _is_stt_noise_token(transcript):
             _carrier_detected_at[0] = time.time()  # always update to latest noise event
             logger.info("STT noise token '%s' — ignoring for speech timers.", transcript)
             # Do NOT interrupt here — calling session.interrupt() on noise events
-            # disrupts Gemini's server-side VAD state and causes generation timeouts.
+            # disrupts the server-side VAD state and causes generation timeouts.
             return
         if _is_carrier_announcement(transcript):
             _carrier_detected_at[0] = time.time()  # always update to latest carrier event
             logger.info("Carrier announcement detected — ignoring for speech timers.")
             # Do NOT interrupt here — calling session.interrupt() on carrier events
-            # disrupts Gemini's server-side VAD state and causes generation timeouts.
+            # disrupts the server-side VAD state and causes generation timeouts.
             return
 
         # Only count the utterance as real user speech once the STT has produced
         # a final (committed) transcript.  Non-final partials like "Thi", "This",
         # "This call" would falsely trigger user_spoke_before_greeting before the
         # carrier filter has enough text to recognise the full announcement phrase.
-        if not getattr(ev, "is_final", False):
+        if not is_final:
             return
 
         # Foreign-script tokens (Telugu, Arabic, Cyrillic, Malayalam, etc.) may
