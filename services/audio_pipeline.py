@@ -41,6 +41,7 @@ def build_llm():
     return lk_openai.LLM(
         model=model,
         api_key=os.getenv("OPENAI_API_KEY"),
+        temperature=0.3,
     )
 
 

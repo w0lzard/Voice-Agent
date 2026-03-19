@@ -955,7 +955,7 @@ async def _speak_scripted_line(
     asyncio.sleep() themselves before calling this function.
     """
     from livekit.agents.llm import ChatMessage
-    session.chat_ctx.messages.append(
+    session.history.messages.append(
         ChatMessage.create(text=text, role="assistant")
     )
     await session.say(text, allow_interruptions=allow_interruptions)
