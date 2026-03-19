@@ -50,6 +50,8 @@ def build_deepgram_stt(
 
     logger.info("Deepgram STT: model=%s language=%s", mdl, lang)
 
+    endpointing = int(os.getenv("DEEPGRAM_ENDPOINTING_MS", "200"))
+
     return deepgram.STT(
         api_key=api_key,
         model=mdl,
@@ -57,6 +59,6 @@ def build_deepgram_stt(
         interim_results=True,
         smart_format=True,
         punctuate=True,
-        # Deepgram endpointing: treat 300 ms of silence as end-of-utterance
-        endpointing_ms=300,
+        # Deepgram endpointing: ms of silence before end-of-utterance
+        endpointing_ms=endpointing,
     )

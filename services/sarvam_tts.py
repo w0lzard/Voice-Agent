@@ -31,10 +31,10 @@ logger = logging.getLogger("sarvam-tts")
 
 # ── Sarvam API ────────────────────────────────────────────────────────────────
 _API_URL     = "https://api.sarvam.ai/text-to-speech"
-_SAMPLE_RATE = 22050   # request this rate; also declare it to LiveKit
+_SAMPLE_RATE = 24000   # higher rate for cleaner audio fidelity
 _CHANNELS    = 1
 _FRAME_MS    = 20      # 20 ms frames — LiveKit standard
-_SAMPS_PER_FRAME = _SAMPLE_RATE * _FRAME_MS // 1000   # 441 samples
+_SAMPS_PER_FRAME = _SAMPLE_RATE * _FRAME_MS // 1000   # 480 samples
 _MAX_CHARS   = 500     # Sarvam per-request character limit
 
 # ── Process-wide audio cache ──────────────────────────────────────────────────
@@ -78,6 +78,8 @@ async def _fetch_audio(
     speaker: str,
     model: str,
     language: str,
+    pace: float = 1.15,
+    loudness: float = 1.3,
 ) -> bytes:
     """
     Call Sarvam TTS REST API.
@@ -104,8 +106,8 @@ async def _fetch_audio(
                 "speaker":              speaker,
                 "model":                model,
                 "pitch":                0,
-                "pace":                 1.0,
-                "loudness":             1.5,
+                "pace":                 pace,
+                "loudness":             loudness,
                 "speech_sample_rate":   _SAMPLE_RATE,
                 "enable_preprocessing": True,
             },
@@ -153,12 +155,16 @@ class _SarvamStream(tts.ChunkedStream):
         speaker: str,
         model: str,
         language: str,
+        pace: float = 1.15,
+        loudness: float = 1.3,
     ) -> None:
         super().__init__(tts=tts_instance, input_text=input_text, conn_options=conn_options)
         self._api_key  = api_key
         self._speaker  = speaker
         self._model    = model
         self._language = language
+        self._pace     = pace
+        self._loudness = loudness
 
     async def _run(self, output_emitter: tts.AudioEmitter) -> None:
         req_id = utils.shortuuid("sarvam")
@@ -185,6 +191,8 @@ class _SarvamStream(tts.ChunkedStream):
                 speaker=self._speaker,
                 model=self._model,
                 language=self._language,
+                pace=self._pace,
+                loudness=self._loudness,
             )
         except asyncio.CancelledError:
             return
@@ -229,6 +237,8 @@ class SarvamTTS(tts.TTS):
         speaker:  str = "anushka",
         model:    str = "bulbul:v2",
         language: str = "hi-IN",
+        pace:     float = 0.0,
+        loudness: float = 0.0,
     ) -> None:
         super().__init__(
             capabilities=tts.TTSCapabilities(streaming=False),
@@ -239,6 +249,8 @@ class SarvamTTS(tts.TTS):
         self._speaker  = speaker  or os.getenv("SARVAM_SPEAKER", "anushka")
         self._model    = model
         self._language = language or os.getenv("SARVAM_LANGUAGE", "hi-IN")
+        self._pace     = pace or float(os.getenv("SARVAM_TTS_PACE", "1.15"))
+        self._loudness = loudness or float(os.getenv("SARVAM_TTS_LOUDNESS", "1.3"))
 
         if not self._api_key:
             logger.warning(
@@ -259,6 +271,8 @@ class SarvamTTS(tts.TTS):
             speaker=self._speaker,
             model=self._model,
             language=self._language,
+            pace=self._pace,
+            loudness=self._loudness,
         )
 
     def update_options(

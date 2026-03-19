@@ -957,21 +957,35 @@ async def _speak_scripted_line(
     await session.say(text, allow_interruptions=allow_interruptions)
 
 
+# Shared session for fire-and-forget POSTs to ws_server — avoids leaking TCP
+# connections (the "Unclosed connection" asyncio errors) which cause audio jitter.
+_interim_session: aiohttp.ClientSession | None = None
+
+
+def _get_interim_session() -> aiohttp.ClientSession:
+    global _interim_session
+    if _interim_session is None or _interim_session.closed:
+        connector = aiohttp.TCPConnector(force_close=True, limit=4)
+        _interim_session = aiohttp.ClientSession(
+            connector=connector,
+            timeout=aiohttp.ClientTimeout(total=0.5),
+        )
+    return _interim_session
+
+
 async def _broadcast_interim(transcript: str, call_id: str) -> None:
     """Fire-and-forget POST of an interim (partial) Deepgram transcript to ws_server."""
     try:
-        connector = aiohttp.TCPConnector(force_close=True)
-        async with aiohttp.ClientSession(connector=connector) as _s:
-            await _s.post(
-                "http://localhost:8090/event",
-                json={
-                    "type":       "transcript_interim",
-                    "transcript": transcript,
-                    "call_id":    call_id,
-                    "timestamp":  time.time(),
-                },
-                timeout=aiohttp.ClientTimeout(total=0.5),
-            )
+        session = _get_interim_session()
+        await session.post(
+            "http://localhost:8090/event",
+            json={
+                "type":       "transcript_interim",
+                "transcript": transcript,
+                "call_id":    call_id,
+                "timestamp":  time.time(),
+            },
+        )
     except Exception:
         pass
 

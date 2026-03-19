@@ -119,6 +119,7 @@ class LatencyTracker:
         self._turn_counters: dict[str, int] = {}
         self._callbacks: list[Callable[[LatencyEvent], None]] = []
         self._ws_url = ws_server_url or "http://localhost:8090/event"
+        self._session: Optional[aiohttp.ClientSession] = None
 
     # ── Public API ────────────────────────────────────────────────────────
 
@@ -194,16 +195,20 @@ class LatencyTracker:
             except Exception as e:
                 logger.debug("Latency callback error: %s", e)
 
+    def _get_session(self) -> aiohttp.ClientSession:
+        if self._session is None or self._session.closed:
+            connector = aiohttp.TCPConnector(force_close=True, limit=4)
+            self._session = aiohttp.ClientSession(
+                connector=connector,
+                timeout=aiohttp.ClientTimeout(total=1.0),
+            )
+        return self._session
+
     async def _broadcast(self, ev: LatencyEvent) -> None:
         """Fire-and-forget POST to ws_server. Silently ignored if server not running."""
         try:
-            connector = aiohttp.TCPConnector(force_close=True)
-            async with aiohttp.ClientSession(connector=connector) as s:
-                await s.post(
-                    self._ws_url,
-                    json=ev.to_dict(),
-                    timeout=aiohttp.ClientTimeout(total=1.0),
-                )
+            session = self._get_session()
+            await session.post(self._ws_url, json=ev.to_dict())
         except Exception:
             pass  # ws_server is optional — agent still works without it
 

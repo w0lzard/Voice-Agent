@@ -5,7 +5,7 @@ Pre-generates greeting + filler audio via Sarvam TTS at agent startup.
 Caches raw PCM bytes in memory so first-word playback is instant (0 latency
 after the pipeline session is ready — no TTS round-trip at call time).
 
-Audio format: PCM 16-bit signed, 22050 Hz, mono (Sarvam native).
+Audio format: PCM 16-bit signed, 24000 Hz, mono (Sarvam native).
 """
 
 import asyncio
@@ -40,7 +40,7 @@ DEFAULT_CLIPS: dict[str, str] = {
 }
 
 _SARVAM_TTS_URL = "https://api.sarvam.ai/text-to-speech"
-_SAMPLE_RATE    = 22050
+_SAMPLE_RATE    = 24000
 
 
 def _wav_to_pcm(wav_bytes: bytes) -> bytes:
@@ -107,7 +107,7 @@ class PrerecordedLayer:
         self._ready = True
 
     async def _generate(self, text: str) -> bytes:
-        """Call Sarvam TTS REST API and return raw PCM bytes at 22050 Hz."""
+        """Call Sarvam TTS REST API and return raw PCM bytes at 24000 Hz."""
         async with aiohttp.ClientSession() as session:
             resp = await session.post(
                 _SARVAM_TTS_URL,
@@ -121,8 +121,8 @@ class PrerecordedLayer:
                     "speaker":              self._speaker,
                     "model":                self._model,
                     "pitch":                0,
-                    "pace":                 1.0,
-                    "loudness":             1.5,
+                    "pace":                 float(os.getenv("SARVAM_TTS_PACE", "1.15")),
+                    "loudness":             float(os.getenv("SARVAM_TTS_LOUDNESS", "1.3")),
                     "speech_sample_rate":   self._sample_rate,
                     "enable_preprocessing": True,
                 },

@@ -154,6 +154,23 @@ def validate(
 
 _WS_SERVER_URL = "http://localhost:8090/event"
 
+# Module-level shared session — avoids creating (and leaking) a new TCP
+# connection for every single transcript event.  The force_close connector
+# ensures connections are torn down immediately after each POST, preventing
+# the "Unclosed connection" asyncio errors that cause audio timing jitter.
+_shared_session: Optional[aiohttp.ClientSession] = None
+
+
+def _get_session() -> aiohttp.ClientSession:
+    global _shared_session
+    if _shared_session is None or _shared_session.closed:
+        connector = aiohttp.TCPConnector(force_close=True, limit=4)
+        _shared_session = aiohttp.ClientSession(
+            connector=connector,
+            timeout=aiohttp.ClientTimeout(total=1.0),
+        )
+    return _shared_session
+
 
 async def broadcast_transcript(entry: TranscriptEntry) -> None:
     """
@@ -161,11 +178,7 @@ async def broadcast_transcript(entry: TranscriptEntry) -> None:
     Silently ignored if the server is not running.
     """
     try:
-        async with aiohttp.ClientSession() as s:
-            await s.post(
-                _WS_SERVER_URL,
-                json=entry.to_dict(),
-                timeout=aiohttp.ClientTimeout(total=1.0),
-            )
+        session = _get_session()
+        await session.post(_WS_SERVER_URL, json=entry.to_dict())
     except Exception:
         pass
