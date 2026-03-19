@@ -1442,10 +1442,10 @@ async def entrypoint(ctx: agents.JobContext):
             greeting and Gemini's turn-detection silently fails to trigger the
             next generation (a known Gemini Live edge case).
             """
-            watchdog_sec = _get_float_env("AGENT_RESPONSE_WATCHDOG_SEC", 4.0)
+            watchdog_sec = _get_float_env("AGENT_RESPONSE_WATCHDOG_SEC", 2.5)
             try:
                 while True:
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(0.5)
                     if _call_failed.is_set():
                         break
                     now = time.time()
