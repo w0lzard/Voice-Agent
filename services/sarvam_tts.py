@@ -25,7 +25,6 @@ import wave
 from typing import Optional
 
 import aiohttp
-from livekit import rtc
 from livekit.agents import tts, utils
 
 logger = logging.getLogger("sarvam-tts")
@@ -155,10 +154,16 @@ class _SarvamStream(tts.ChunkedStream):
         self._model    = model
         self._language = language
 
-    async def _run(self) -> None:
-        req_id  = utils.shortuuid("sarvam")
-        seg_id  = utils.shortuuid("S")
-        stride  = _SAMPS_PER_FRAME * 2   # bytes per frame (16-bit)
+    async def _run(self, output_emitter: tts.AudioEmitter) -> None:
+        req_id = utils.shortuuid("sarvam")
+        stride = _SAMPS_PER_FRAME * 2   # bytes per frame (16-bit)
+
+        output_emitter.initialize(
+            request_id=req_id,
+            sample_rate=_SAMPLE_RATE,
+            num_channels=_CHANNELS,
+            mime_type="audio/pcm",
+        )
 
         try:
             pcm = await _fetch_audio(
@@ -182,23 +187,7 @@ class _SarvamStream(tts.ChunkedStream):
             # Pad final short frame
             if len(chunk) < stride:
                 chunk = chunk + b"\x00" * (stride - len(chunk))
-
-            frame = rtc.AudioFrame(
-                data=chunk,
-                sample_rate=_SAMPLE_RATE,
-                num_channels=_CHANNELS,
-                samples_per_channel=_SAMPS_PER_FRAME,
-            )
-            self._event_ch.send_nowait(
-                tts.SynthesisEvent(
-                    type=tts.SynthesisEventType.AUDIO,
-                    audio=tts.SynthesizedAudio(
-                        request_id=req_id,
-                        segment_id=seg_id,
-                        frame=frame,
-                    ),
-                )
-            )
+            output_emitter.push(chunk)
 
 
 class SarvamTTS(tts.TTS):

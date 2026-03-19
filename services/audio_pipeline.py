@@ -44,6 +44,22 @@ def build_llm():
     )
 
 
+# Map short BCP-47 codes (used by Deepgram) to full locale codes (required by Sarvam)
+_SARVAM_LANG_MAP = {
+    "hi":  "hi-IN",
+    "en":  "en-IN",
+    "bn":  "bn-IN",
+    "gu":  "gu-IN",
+    "kn":  "kn-IN",
+    "ml":  "ml-IN",
+    "mr":  "mr-IN",
+    "od":  "od-IN",
+    "pa":  "pa-IN",
+    "ta":  "ta-IN",
+    "te":  "te-IN",
+}
+
+
 def build_tts(
     speaker:  Optional[str] = None,
     language: Optional[str] = None,
@@ -52,7 +68,8 @@ def build_tts(
     from services.sarvam_tts import SarvamTTS
 
     spk = speaker  or os.getenv("SARVAM_SPEAKER",  "anushka")
-    lng = language or os.getenv("SARVAM_LANGUAGE", "hi-IN")
+    raw = language or os.getenv("SARVAM_LANGUAGE", "hi-IN")
+    lng = _SARVAM_LANG_MAP.get(raw, raw)  # expand "hi" → "hi-IN" etc.
 
     logger.info("TTS: Sarvam %s (%s)", spk, lng)
     return SarvamTTS(

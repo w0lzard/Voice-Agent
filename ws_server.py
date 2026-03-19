@@ -65,6 +65,7 @@ _MAX_EVENTS = 500
 
 async def _broadcast(event: dict) -> None:
     """Push event to all live WebSocket clients and persist in log."""
+    global _ws_clients
     _event_log.append(event)
     if len(_event_log) > _MAX_EVENTS:
         _event_log.pop(0)
