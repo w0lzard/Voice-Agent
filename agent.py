@@ -1317,11 +1317,19 @@ async def entrypoint(ctx: agents.JobContext):
             # due to static noise on PSTN SIP trunks.
             logger.debug(f"Deepgram is_final triggered. Forcing immediate generate_reply().")
             try:
-                # Cancel the current slow generation turn and start immediately
+                # Cancel the current slow generation turn
                 session.interrupt()
             except Exception:
                 pass
-            asyncio.ensure_future(session.generate_reply())
+            
+            # Wait a tiny moment for LiveKit's internal AgentSession to clear its TTS
+            # and VAD state from the interrupt, otherwise it queues generate_reply()
+            # behind a static-locked VAD check, causing a 6+ second latency hang!
+            async def _instant_reply():
+                await asyncio.sleep(0.2)
+                session.generate_reply()
+                
+            asyncio.ensure_future(_instant_reply())
 
         # ── Layer 3 latency tracking: STT end → LLM start ─────────────────
         call_id = ctx.room.name
