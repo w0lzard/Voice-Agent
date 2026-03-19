@@ -3,3 +3,7 @@ livekit-plugins-openai==1.4.4
 livekit-plugins-noise-cancellation
 python-dotenv
 aiohttp
+
+# Metrics WebSocket server
+fastapi
+uvicorn

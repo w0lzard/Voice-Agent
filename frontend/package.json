@@ -10,6 +10,9 @@
     "deploy:vercel:preview": "vercel"
   },
   "dependencies": {
+    "@livekit/components-react": "^2.9.0",
+    "@livekit/components-styles": "^1.1.3",
+    "livekit-client": "^2.9.0",
     "axios": "^1.13.5",
     "lucide-react": "^0.564.0",
     "next": "16.1.6",

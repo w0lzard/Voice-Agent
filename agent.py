@@ -8,6 +8,28 @@ import threading
 from pathlib import Path
 from dotenv import load_dotenv
 
+# ── 3-Layer speech architecture ───────────────────────────────────────────────
+try:
+    from layers.layer1_prerecorded import prerecorded as _layer1
+    from layers.layer2_fillers import filler_layer as _layer2
+    _HAS_LAYERS = True
+except ImportError:
+    _HAS_LAYERS = False
+
+# ── Latency tracker ────────────────────────────────────────────────────────────
+try:
+    from latency.tracker import tracker as _latency_tracker
+    _HAS_LATENCY = True
+except ImportError:
+    _HAS_LATENCY = False
+
+# ── Transcription validator ────────────────────────────────────────────────────
+try:
+    from transcription.validator import validate as _validate_transcript, broadcast_transcript
+    _HAS_TRANSCRIPTION = True
+except ImportError:
+    _HAS_TRANSCRIPTION = False
+
 # ---------------------------------------------------------------------------
 # Concurrent call limiter — cross-process safe via fcntl (Linux/Railway).
 # Falls back to in-process threading.Lock only (sufficient for single-process
@@ -851,7 +873,10 @@ class OutboundAssistant(Agent):
 
 def prewarm(proc: agents.JobProcess) -> None:
     """Keep warm worker processes ready for incoming jobs."""
-    pass
+    # Pre-generate greeting/filler audio clips at process startup (Layer 1).
+    # This runs once per worker process so the first call has zero TTS latency.
+    if _HAS_LAYERS:
+        asyncio.get_event_loop().run_until_complete(_layer1.preload())
 
 
 async def _speak_scripted_line(
@@ -1158,12 +1183,28 @@ async def entrypoint(ctx: agents.JobContext):
             )
             return
 
-        logger.info("STT accepted (final): \"%s\" → passing to Gemini LLM", _safe_log_text(transcript))
+        logger.info("STT accepted (final): \"%s\" → passing to LLM", _safe_log_text(transcript))
         last_user_speech_at = time.time()
         if reprompt_task and not reprompt_task.done():
             reprompt_task.cancel()
             reprompt_task = None
         fnc_ctx.set_last_user_utterance(transcript)
+
+        # ── Layer 3 latency tracking: STT end → LLM start ─────────────────
+        call_id = ctx.room.name
+        if _HAS_LATENCY:
+            ev = _latency_tracker.start_turn(call_id)
+            ev.stt_end = time.time()
+            ev.llm_start = time.time()
+
+        # ── Transcription broadcast for live dashboard ─────────────────────
+        if _HAS_TRANSCRIPTION:
+            entry = _validate_transcript(transcript, role="user", call_id=call_id)
+            asyncio.ensure_future(broadcast_transcript(entry))
+
+        # ── Layer 2: start filler monitor (cancelled when agent speaks) ────
+        if _HAS_LAYERS:
+            asyncio.ensure_future(_layer2.monitor_and_inject(session, time.time()))
 
     @session.on("conversation_item_added")
     def _on_conversation_item_added(ev) -> None:
@@ -1187,7 +1228,25 @@ async def entrypoint(ctx: agents.JobContext):
         if text:
             logger.info("conversation_item_added role=%s text=\"%s\"", role, _safe_log_text(text))
             if role == "assistant":
-                _last_agent_response_at[0] = time.time()
+                now = time.time()
+                _last_agent_response_at[0] = now
+
+                # ── Latency: TTS first audio ──────────────────────────────
+                call_id = ctx.room.name
+                if _HAS_LATENCY:
+                    ev = _latency_tracker.current(call_id)
+                    if ev:
+                        if ev.llm_first_token is None:
+                            ev.llm_first_token = now
+                        ev.tts_first_audio = now
+                        ev.llm_end = now
+                        ev.tts_end = now
+                        _latency_tracker.finish_turn(call_id)
+
+                # ── Broadcast agent transcript ────────────────────────────
+                if _HAS_TRANSCRIPTION:
+                    entry = _validate_transcript(text, role="agent", call_id=call_id)
+                    asyncio.ensure_future(broadcast_transcript(entry))
 
     async def _reprompt_if_no_speech() -> None:
         """Send up to 2 reprompts if the caller stays silent after the greeting.
