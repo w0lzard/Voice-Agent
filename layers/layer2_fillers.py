@@ -153,8 +153,10 @@ class FillerLayer:
         self._pool = self._build_pool(language)
 
 
-# Module-level singleton
+# Module-level singleton — default to Hindi fillers so the agent never
+# injects English fillers during a Hindi-language call.  Callers that
+# actually want English fillers can set FILLER_LANGUAGE=en in the env.
 filler_layer = FillerLayer(
     delay_threshold=float(__import__("os").getenv("FILLER_DELAY_SEC", "0.9")),
-    language="hinglish",
+    language=__import__("os").getenv("FILLER_LANGUAGE", "hi"),
 )

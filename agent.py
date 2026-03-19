@@ -1521,8 +1521,12 @@ async def entrypoint(ctx: agents.JobContext):
             # In pipeline mode (Deepgram + OpenAI), there's no Gemini WebSocket to
             # warm up — the session is ready immediately.  Use 0 warmup so the
             # greeting can fire as soon as the carrier window elapses.
+            # Also halve the carrier wait baseline (3s → 1.5s) since pipeline mode
+            # starts faster and the greeting TTS is pre-warmed during the wait.
             if _pipeline_mode:
                 warmup_sec = 0.0
+                if not os.getenv("CARRIER_ANNOUNCEMENT_WAIT_SEC"):
+                    carrier_wait = 1.5
 
             gemini_ready_at = _entrypoint_start_at + warmup_sec
             answered_at = _call_answered_at[0] or time.time()
