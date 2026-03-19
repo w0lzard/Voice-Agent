@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { TranscriptPanel } from "../../components/voice/TranscriptPanel";
 import { LatencyPanel } from "../../components/voice/LatencyPanel";
+import { TranscriptDebugPanel } from "../../components/voice/TranscriptDebugPanel";
 
 // SSR-safe — LiveKit uses browser APIs
 const VoiceAgent = dynamic(
@@ -11,7 +12,7 @@ const VoiceAgent = dynamic(
 );
 
 const WS_SERVER = process.env.NEXT_PUBLIC_WS_SERVER || "http://localhost:8090";
-const WS_URL = WS_SERVER.replace(/^http/, "ws") + "/ws";
+const WS_URL    = WS_SERVER.replace(/^http/, "ws") + "/ws";
 
 function LayerBadge({ n, label, desc, colorClass }) {
   return (
@@ -40,17 +41,21 @@ export default function VoiceTestPage() {
         <div className="flex items-center gap-3 text-xs text-gray-500">
           <span className="flex items-center gap-1.5">
             <span className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
-            OpenAI Realtime
+            Deepgram STT
           </span>
-          <span className="px-2 py-1 bg-gray-800 rounded text-gray-400">gpt-4o-mini-realtime</span>
-          <span className="px-2 py-1 bg-gray-800 rounded text-gray-400">alloy voice</span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 bg-purple-400 rounded-full animate-pulse" />
+            Sarvam TTS
+          </span>
+          <span className="px-2 py-1 bg-gray-800 rounded text-gray-400">gpt-4o-mini</span>
+          <span className="px-2 py-1 bg-gray-800 rounded text-gray-400">meera voice</span>
           <a href="/dashboard" className="px-3 py-1 bg-blue-600/20 border border-blue-500/30 rounded text-blue-400 hover:bg-blue-600/30 transition-colors">
             ← Dashboard
           </a>
         </div>
       </header>
 
-      {/* 3-column layout */}
+      {/* 4-column layout: Agent | Transcript | Debug | Latency */}
       <div className="grid grid-cols-12 gap-0" style={{ height: "calc(100vh - 65px)" }}>
 
         {/* Left: Voice Agent */}
@@ -59,26 +64,27 @@ export default function VoiceTestPage() {
             <VoiceAgent />
           </div>
 
-          {/* Layer architecture info */}
+          {/* Layer architecture */}
           <div className="mt-6 rounded-xl bg-gray-800/50 border border-gray-700 p-4 space-y-2">
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">3-Layer Architecture</p>
-            <LayerBadge n="1" label="Pre-recorded Layer" desc="Instant greeting cache (0ms)"
+            <LayerBadge n="1" label="Pre-recorded Layer" desc="Instant greeting cache (0ms) · Sarvam"
               colorClass="text-orange-400 bg-orange-500/10 border-orange-500/20" />
             <LayerBadge n="2" label="Smart Filler Layer" desc="Covers LLM thinking delays"
               colorClass="text-yellow-400 bg-yellow-500/10 border-yellow-500/20" />
-            <LayerBadge n="3" label="AI Intelligence Layer" desc="OpenAI Realtime STT+LLM+TTS"
+            <LayerBadge n="3" label="AI Intelligence Layer" desc="Deepgram STT + GPT-4o-mini + Sarvam TTS"
               colorClass="text-green-400 bg-green-500/10 border-green-500/20" />
           </div>
 
-          {/* Pipeline info */}
+          {/* Pipeline */}
           <div className="mt-3 rounded-xl bg-gray-800/50 border border-gray-700 p-4">
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Pipeline</p>
             <div className="space-y-1.5 text-xs">
               {[
-                ["STT",       "OpenAI Realtime native"],
-                ["LLM",       "gpt-4o-mini-realtime"],
-                ["TTS",       "OpenAI audio stream"],
-                ["Voice",     "alloy (feminine)"],
+                ["STT",       "Deepgram nova-2 (streaming)"],
+                ["LLM",       "gpt-4o-mini (chat)"],
+                ["TTS",       "Sarvam Meera (female)"],
+                ["Voice",     "meera · hi-IN"],
+                ["VAD",       "Silero (turn detection)"],
                 ["Transport", "LiveKit WebRTC"],
                 ["Telephony", "Vobiz SIP"],
               ].map(([k, v]) => (
@@ -91,9 +97,14 @@ export default function VoiceTestPage() {
           </div>
         </div>
 
-        {/* Center: Transcript */}
-        <div className="col-span-6 border-r border-gray-800 p-6 flex flex-col min-h-0">
+        {/* Center: Live Transcript */}
+        <div className="col-span-4 border-r border-gray-800 p-6 flex flex-col min-h-0">
           <TranscriptPanel wsUrl={WS_URL} />
+        </div>
+
+        {/* Center-Right: Real-time Debug Panel */}
+        <div className="col-span-2 border-r border-gray-800 p-4 flex flex-col min-h-0 overflow-y-auto">
+          <TranscriptDebugPanel wsUrl={WS_URL} />
         </div>
 
         {/* Right: Latency */}

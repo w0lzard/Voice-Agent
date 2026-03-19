@@ -3,44 +3,67 @@
  *
  * Responsibilities:
  *  1. Strip the /v1 prefix before forwarding to the backend
- *  2. Normalize response format to { ok, data, ... } that the frontend expects
+ *  2. Normalize response format + call field names
  *  3. Transform auth responses (tokens.access_token → token)
- *  4. Transform /calls/start body shape
- *  5. Return graceful stubs for endpoints not yet in the backend
+ *  4. Compute dashboard stats / analytics from real call data
+ *  5. Fetch real transcripts from call detail endpoint
+ *  6. Return graceful stubs for endpoints not yet in the backend
  */
 import { NextResponse } from 'next/server';
 
-// Set GATEWAY_URL on Vercel (server-side only — never exposed to browser)
+// Set GATEWAY_URL in Vercel env vars (server-side only — never exposed to browser)
 const GATEWAY_URL = (
   process.env.GATEWAY_URL ||
   'http://localhost:8000'
 ).replace(/\/+$/, '');
 
-// ─── Stub responses for unimplemented backend endpoints ──────────────────────
+// ─── Field normalisers ────────────────────────────────────────────────────────
+
+function mapCallStatus(s) {
+  const m = {
+    initiated:  'queued',
+    ringing:    'in-progress',
+    answered:   'in-progress',
+    completed:  'completed',
+    failed:     'failed',
+    no_answer:  'missed',
+  };
+  return m[s] || s || 'unknown';
+}
+
+function normalizeCall(c) {
+  return {
+    ...c,
+    // duration_seconds (backend) → duration (frontend)
+    duration: c.duration_seconds ?? c.duration ?? 0,
+    // Map backend status enum values to frontend string values
+    status: mapCallStatus(c.status),
+    // Flatten agent name
+    agent_name: c.assistant_name || c.agent_name ||
+      (c.assistant_id ? `Agent ${c.assistant_id.slice(-6)}` : 'AI Agent'),
+    // Flatten sentiment from analysis sub-object
+    sentiment: c.analysis?.sentiment || c.sentiment || null,
+  };
+}
+
+// ─── Stub responses for endpoints not in the backend ─────────────────────────
 const EXACT_STUBS = {
-  'GET /metrics': {
-    ok: true,
-    data: { total_calls: 0, active_calls: 0, success_rate: 0, total_minutes: 0, lead_conversion: 0 },
-  },
-  'GET /stats': { ok: true, data: {} },
-  'GET /system/logs': { ok: true, data: [] },
-  'GET /uploads': { ok: true, data: [] },
-  'DELETE /auth/account': { ok: true },
-  'POST /auth/avatar': { ok: true, data: {} },
-  'POST /calls/upload-numbers': { ok: true, data: { uploaded: 0 } },
+  'GET /system/logs':          { ok: true, data: [] },
+  'GET /uploads':              { ok: true, data: [] },
+  'DELETE /auth/account':      { ok: true },
+  'POST /auth/avatar':         { ok: true, data: {} },
+  'POST /calls/upload-numbers':{ ok: true, data: { uploaded: 0 } },
 };
 
-// ─── Pattern stubs (checked when no exact stub matches) ──────────────────────
 const PATTERN_STUBS = [
-  { method: 'GET',    pattern: /^\/clients/,                  response: { ok: true, data: [], total: 0 } },
-  { method: 'GET',    pattern: /^\/documents/,                response: { ok: true, data: [] } },
-  { method: 'POST',   pattern: /^\/documents/,                response: { ok: true, data: {} } },
-  { method: 'DELETE', pattern: /^\/documents\//,              response: { ok: true } },
-  { method: 'GET',    pattern: /^\/knowledge-bases/,          response: { ok: true, data: [] } },
-  { method: 'POST',   pattern: /^\/knowledge-bases/,          response: { ok: true, data: {} } },
-  { method: 'PUT',    pattern: /^\/knowledge-bases\//,        response: { ok: true, data: {} } },
-  { method: 'DELETE', pattern: /^\/knowledge-bases\//,        response: { ok: true } },
-  { method: 'GET',    pattern: /^\/calls\/[^/]+\/transcript$/, response: { ok: true, data: null } },
+  { method: 'GET',    pattern: /^\/clients/,           response: { ok: true, data: [], total: 0 } },
+  { method: 'GET',    pattern: /^\/documents/,         response: { ok: true, data: [] } },
+  { method: 'POST',   pattern: /^\/documents/,         response: { ok: true, data: {} } },
+  { method: 'DELETE', pattern: /^\/documents\//,       response: { ok: true } },
+  { method: 'GET',    pattern: /^\/knowledge-bases/,   response: { ok: true, data: [] } },
+  { method: 'POST',   pattern: /^\/knowledge-bases/,   response: { ok: true, data: {} } },
+  { method: 'PUT',    pattern: /^\/knowledge-bases\//,  response: { ok: true, data: {} } },
+  { method: 'DELETE', pattern: /^\/knowledge-bases\//,  response: { ok: true } },
   { method: 'GET',    pattern: /^\/calls\/[^/]+\/recordings$/, response: { ok: true, data: [] } },
   { method: 'PUT',    pattern: /^\/auth\/(profile|password)$/, response: { ok: true } },
   // NOTE: /auth/resend-code is NOT stubbed — it must reach the backend to send the OTP
@@ -56,13 +79,124 @@ function normalise(path, data) {
   }
   // Backend returns { calls: [...], count: N }
   if (data && Array.isArray(data.calls)) {
-    return { ok: true, data: data.calls, total: data.count ?? data.calls.length };
+    return {
+      ok: true,
+      data: data.calls.map(normalizeCall),
+      total: data.count ?? data.calls.length,
+    };
   }
   if (data && Array.isArray(data.items)) {
     return { ok: true, data: data.items, total: data.total ?? data.items.length };
   }
   if (data && data.ok !== undefined) return data;
   return { ok: true, data };
+}
+
+// ─── Fetch all calls for stats computation ────────────────────────────────────
+async function fetchAllCalls(authHeader, limit = 200) {
+  if (!authHeader) return [];
+  try {
+    const res = await fetch(`${GATEWAY_URL}/api/calls?limit=${limit}`, {
+      headers: { Authorization: authHeader },
+    });
+    if (!res.ok) return [];
+    const json = await res.json();
+    const raw = Array.isArray(json.calls) ? json.calls : [];
+    return raw.map(normalizeCall);
+  } catch {
+    return [];
+  }
+}
+
+// ─── Compute dashboard stats from call array ──────────────────────────────────
+function computeStats(calls) {
+  const now = Date.now();
+  const oneWeekAgo = now - 7 * 86400000;
+  const twoWeeksAgo = now - 14 * 86400000;
+
+  const thisWeek = calls.filter(c => c.created_at && new Date(c.created_at).getTime() >= oneWeekAgo);
+  const lastWeek = calls.filter(c => {
+    const t = c.created_at ? new Date(c.created_at).getTime() : 0;
+    return t >= twoWeeksAgo && t < oneWeekAgo;
+  });
+
+  const countBy = (arr, pred) => arr.filter(pred).length;
+
+  const isActive    = c => ['in-progress', 'queued'].includes(c.status);
+  const isCompleted = c => c.status === 'completed';
+  const isFailed    = c => ['failed', 'missed'].includes(c.status);
+
+  const durations = calls.map(c => c.duration || 0).filter(d => d > 0);
+  const avgDuration = durations.length
+    ? Math.round(durations.reduce((a, b) => a + b, 0) / durations.length)
+    : 0;
+
+  const pctChange = (cur, prev) =>
+    prev > 0 ? Math.round(((cur - prev) / prev) * 100) : (cur > 0 ? 100 : 0);
+
+  return {
+    totalCalls:       calls.length,
+    activeCalls:      countBy(calls, isActive),
+    completedCalls:   countBy(calls, isCompleted),
+    failedCalls:      countBy(calls, isFailed),
+    avgDurationSeconds: avgDuration,
+    callDurationStats: {
+      under1Min:       durations.filter(d => d < 60).length,
+      oneToThreeMins:  durations.filter(d => d >= 60  && d < 180).length,
+      threeToFiveMins: durations.filter(d => d >= 180 && d < 300).length,
+      over5Mins:       durations.filter(d => d >= 300).length,
+    },
+    weeklyChange: {
+      totalCalls:     pctChange(thisWeek.length, lastWeek.length),
+      completedCalls: pctChange(countBy(thisWeek, isCompleted), countBy(lastWeek, isCompleted)),
+      failedCalls:    pctChange(countBy(thisWeek, isFailed),    countBy(lastWeek, isFailed)),
+    },
+  };
+}
+
+// ─── Compute call analytics from call array ───────────────────────────────────
+function computeAnalytics(calls) {
+  // Daily volume — last 7 calendar days
+  const DAY_LABELS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'];
+  const dailyMap = {};
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(Date.now() - i * 86400000);
+    const key = d.toISOString().split('T')[0];
+    dailyMap[key] = { day: DAY_LABELS[d.getDay()], calls: 0 };
+  }
+  calls.forEach(c => {
+    if (!c.created_at) return;
+    const key = new Date(c.created_at).toISOString().split('T')[0];
+    if (dailyMap[key]) dailyMap[key].calls++;
+  });
+  const dailyVolume = Object.values(dailyMap);
+
+  // Agent performance
+  const agentMap = {};
+  calls.forEach(c => {
+    const name = c.agent_name || 'AI Agent';
+    if (!agentMap[name]) agentMap[name] = { name, total: 0, completed: 0 };
+    agentMap[name].total++;
+    if (c.status === 'completed') agentMap[name].completed++;
+  });
+  const agentPerformance = Object.values(agentMap)
+    .sort((a, b) => b.total - a.total)
+    .slice(0, 4)
+    .map(a => ({
+      name: a.name,
+      completionRate: a.total > 0 ? Math.round((a.completed / a.total) * 100) : 0,
+      totalCalls: a.total,
+    }));
+
+  // Sentiment breakdown
+  const sentimentBreakdown = { positive: 0, neutral: 0, negative: 0 };
+  calls.forEach(c => {
+    const s = (c.sentiment || 'neutral').toLowerCase();
+    if (s in sentimentBreakdown) sentimentBreakdown[s]++;
+    else sentimentBreakdown.neutral++;
+  });
+
+  return { dailyVolume, agentPerformance, sentimentBreakdown };
 }
 
 // ─── Path & body mapping ──────────────────────────────────────────────────────
@@ -80,40 +214,35 @@ function mapRequest(path, method) {
 async function handleRequest(request, { params }, method) {
   const pathParts = (await params).path ?? [];
   const path = '/' + pathParts.join('/');
-
-  // 1. Exact stub
   const exactKey = `${method} ${path}`;
+  const auth = request.headers.get('authorization');
 
-  // Dynamic wallet: compute from real calls data (no billing backend exists)
+  // ── 1. Computed: wallet ────────────────────────────────────────────────────
   if (exactKey === 'GET /wallet') {
-    const authHeader = request.headers.get('authorization');
-    const emptyWallet = { ok: true, data: { currentBalance: 0, totalSpend: 0, spendChange: 0, totalCalls: 0, dailyBreakdown: [], transactions: [] } };
-    if (!authHeader) return NextResponse.json(emptyWallet);
+    const emptyWallet = {
+      ok: true,
+      data: { currentBalance: 0, totalSpend: 0, spendChange: 0, totalCalls: 0, dailyBreakdown: [], transactions: [] },
+    };
+    if (!auth) return NextResponse.json(emptyWallet);
     try {
-      const callsRes = await fetch(`${GATEWAY_URL}/api/calls?limit=100`, { headers: { Authorization: authHeader } });
-      const callsJson = callsRes.ok ? await callsRes.json() : {};
-      const calls = Array.isArray(callsJson.calls) ? callsJson.calls : [];
-
-      // Daily breakdown keyed by date
+      const calls = await fetchAllCalls(auth, 100);
       const dailyMap = {};
       calls.forEach(c => {
         if (!c.created_at) return;
-        const dateKey = c.created_at.split('T')[0];
-        if (!dailyMap[dateKey]) dailyMap[dateKey] = { date: dateKey, calls: 0, spend: 0 };
-        dailyMap[dateKey].calls++;
+        const key = c.created_at.split('T')[0];
+        if (!dailyMap[key]) dailyMap[key] = { date: key, calls: 0, spend: 0 };
+        dailyMap[key].calls++;
       });
-      const dailyBreakdown = Object.values(dailyMap).sort((a, b) => a.date.localeCompare(b.date)).slice(-7);
-
-      // Call-count change: today vs yesterday (proxy for activity trend)
-      const today = new Date().toISOString().split('T')[0];
+      const dailyBreakdown = Object.values(dailyMap)
+        .sort((a, b) => a.date.localeCompare(b.date))
+        .slice(-7);
+      const today     = new Date().toISOString().split('T')[0];
       const yesterday = new Date(Date.now() - 86400000).toISOString().split('T')[0];
-      const todayCalls = dailyMap[today]?.calls ?? 0;
+      const todayCalls     = dailyMap[today]?.calls ?? 0;
       const yesterdayCalls = dailyMap[yesterday]?.calls ?? 0;
       const spendChange = yesterdayCalls > 0
         ? Math.round(((todayCalls - yesterdayCalls) / yesterdayCalls) * 100)
         : 0;
-
-      // Transactions from call records
       const transactions = calls.slice(0, 20).map(c => ({
         id: c.call_id,
         type: 'call',
@@ -125,31 +254,67 @@ async function handleRequest(request, { params }, method) {
         amount: 0,
         status: c.status || 'completed',
       }));
-
-      return NextResponse.json({ ok: true, data: { currentBalance: 0, totalSpend: 0, spendChange, totalCalls: calls.length, dailyBreakdown, transactions } });
+      return NextResponse.json({
+        ok: true,
+        data: { currentBalance: 0, totalSpend: 0, spendChange, totalCalls: calls.length, dailyBreakdown, transactions },
+      });
     } catch {
       return NextResponse.json(emptyWallet);
     }
   }
 
+  // ── 2. Computed: dashboard stats ───────────────────────────────────────────
+  if (exactKey === 'GET /stats' || exactKey === 'GET /dashboard/stats') {
+    if (!auth) return NextResponse.json({ ok: true, data: computeStats([]) });
+    const calls = await fetchAllCalls(auth);
+    return NextResponse.json({ ok: true, data: computeStats(calls) });
+  }
+
+  // ── 3. Computed: dashboard analytics (metrics) ─────────────────────────────
+  if (exactKey === 'GET /metrics' || exactKey === 'GET /dashboard/analytics') {
+    if (!auth) return NextResponse.json({ ok: true, data: computeAnalytics([]) });
+    const calls = await fetchAllCalls(auth);
+    return NextResponse.json({ ok: true, data: computeAnalytics(calls) });
+  }
+
+  // ── 4. Transcript: fetch from call detail and extract ──────────────────────
+  const transcriptMatch = path.match(/^\/calls\/([^/]+)\/transcript$/);
+  if (transcriptMatch && method === 'GET') {
+    const callId = transcriptMatch[1];
+    if (!auth) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
+    try {
+      const callRes = await fetch(`${GATEWAY_URL}/api/calls/${callId}`, {
+        headers: { Authorization: auth },
+      });
+      if (!callRes.ok) {
+        if (callRes.status === 404) return NextResponse.json({ ok: true, data: null });
+        return NextResponse.json({ ok: false, error: 'Call not found' }, { status: callRes.status });
+      }
+      const callData = await callRes.json();
+      // Backend stores transcript as List[Dict] on the call record
+      const transcript = Array.isArray(callData.transcript) ? callData.transcript : [];
+      return NextResponse.json({ ok: true, data: { callId, transcript } });
+    } catch {
+      return NextResponse.json({ ok: true, data: null });
+    }
+  }
+
+  // ── 5. Exact stubs ─────────────────────────────────────────────────────────
   if (EXACT_STUBS[exactKey]) return NextResponse.json(EXACT_STUBS[exactKey]);
 
-  // 2. Pattern stub
+  // ── 6. Pattern stubs ───────────────────────────────────────────────────────
   for (const s of PATTERN_STUBS) {
     if (s.method === method && s.pattern.test(path)) {
       return NextResponse.json(s.response);
     }
   }
 
-  // 3. Forward to Railway Gateway
+  // ── 7. Forward to backend gateway ─────────────────────────────────────────
   const { backendPath, transformBody, skipApiPrefix } = mapRequest(path, method);
   const searchParams = new URL(request.url).searchParams.toString();
   const backendUrl = `${GATEWAY_URL}${skipApiPrefix ? '' : '/api'}${backendPath}${searchParams ? '?' + searchParams : ''}`;
 
-  const auth = request.headers.get('authorization');
-
-  // Short-circuit authenticated-only list endpoints when there is no token —
-  // avoids flooding the backend with 401s from unauthenticated pollers.
+  // Short-circuit authenticated-only list endpoints when there is no token
   if (!auth && /^\/(calls|assistants|campaigns)(\/|$)/.test(path) && method === 'GET') {
     return NextResponse.json({ ok: true, data: [], total: 0, count: 0 });
   }
@@ -187,7 +352,6 @@ async function handleRequest(request, { params }, method) {
     try { data = await res.json(); } catch { /* non-JSON body */ }
 
     if (!res.ok) {
-      // Pass needsVerification through (e.g. unverified email on login)
       const detail = data.detail ?? data.error ?? 'Request failed';
       if (detail && typeof detail === 'object' && detail.needsVerification) {
         return NextResponse.json(
@@ -204,7 +368,7 @@ async function handleRequest(request, { params }, method) {
     return NextResponse.json(normalise(path, data));
   } catch {
     return NextResponse.json(
-      { ok: false, error: 'Gateway unreachable. Check Railway deployment.' },
+      { ok: false, error: 'Gateway unreachable. Check backend deployment.' },
       { status: 502 }
     );
   }

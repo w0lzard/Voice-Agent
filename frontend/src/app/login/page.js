@@ -4,11 +4,11 @@ import { useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
-import { API_BASE } from '../../lib/api';
+import { API_BASE } from '@/lib/api';
 
 export default function LoginPage() {
-    const router = useRouter();
     const { login } = useAuth();
+    const router = useRouter();
 
     const [tab, setTab] = useState('email'); // 'email' | 'phone'
 
@@ -25,27 +25,32 @@ export default function LoginPage() {
     const handleEmailSubmit = async (e) => {
         e.preventDefault();
         setError('');
-        setLoading(true);
 
+        if (!email || !password) {
+            setError('Please enter your email and password.');
+            return;
+        }
+        if (password.length < 8) {
+            setError('Password must be at least 8 characters.');
+            return;
+        }
+
+        setLoading(true);
         try {
-            const url = `${API_BASE}/v1/auth/login`;
-            const res = await fetch(url, {
+            const res = await fetch(`${API_BASE}/v1/auth/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email, password })
             });
-
             const data = await res.json();
-
             if (!res.ok || !data.ok) {
                 if (data.needsVerification) {
                     router.push(`/verify?email=${encodeURIComponent(data.email || email)}`);
                     return;
                 }
-                setError(data.error || 'Login failed');
+                setError(data.error || 'Login failed. Check your credentials.');
                 return;
             }
-
             login(data.token, data.user);
         } catch {
             setError('Network error. Please make sure the backend is running.');
@@ -57,22 +62,24 @@ export default function LoginPage() {
     const handlePhoneSubmit = async (e) => {
         e.preventDefault();
         setError('');
-        setLoading(true);
 
+        if (!phone) {
+            setError('Please enter your phone number.');
+            return;
+        }
+
+        setLoading(true);
         try {
             const res = await fetch(`${API_BASE}/v1/auth/phone-otp/send`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ phone })
             });
-
             const data = await res.json();
-
             if (!res.ok || !data.ok) {
-                setError(data.error || 'Failed to send OTP');
+                setError(data.error || 'Failed to send OTP. Please try again.');
                 return;
             }
-
             router.push(`/verify-phone?phone=${encodeURIComponent(phone)}`);
         } catch {
             setError('Network error. Please try again.');
@@ -125,10 +132,7 @@ export default function LoginPage() {
                 >
                     <button
                         type="button"
-                        onClick={() => {
-                            setTab('email');
-                            setError('');
-                        }}
+                        onClick={() => { setTab('email'); setError(''); }}
                         style={{
                             flex: 1,
                             padding: '8px 0',
@@ -147,10 +151,7 @@ export default function LoginPage() {
 
                     <button
                         type="button"
-                        onClick={() => {
-                            setTab('phone');
-                            setError('');
-                        }}
+                        onClick={() => { setTab('phone'); setError(''); }}
                         style={{
                             flex: 1,
                             padding: '8px 0',
@@ -213,7 +214,7 @@ export default function LoginPage() {
                         </div>
 
                         <button type="submit" className="btn btn-primary" disabled={loading}>
-                            {loading ? 'Sending OTP...' : 'Send OTP'}
+                            {loading ? 'Signing in...' : 'Send OTP'}
                         </button>
                     </form>
                 )}
@@ -231,7 +232,7 @@ export default function LoginPage() {
                 </button>
 
                 <div className="auth-footer">
-                    Don't have an account? <Link href="/signup">Sign up</Link>
+                    Don&apos;t have an account? <Link href="/signup">Sign up</Link>
                 </div>
             </div>
         </div>

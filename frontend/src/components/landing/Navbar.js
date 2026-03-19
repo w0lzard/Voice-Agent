@@ -7,8 +7,7 @@ import { useAuth } from '@/components/AuthProvider';
 const NAV_LINKS = [
   { href: '#features', label: 'Features' },
   { href: '#how-it-works', label: 'How it Works' },
-  { href: '#integrations', label: 'Integrations' },
-  { href: '#pricing', label: 'Pricing' },
+  { href: '#demo', label: 'Demo' },
 ];
 
 export default function LandingNavbar() {
@@ -62,7 +61,7 @@ export default function LandingNavbar() {
                 href="/signup"
                 className="bg-primary hover:bg-primary/90 text-white px-6 py-2.5 rounded-xl font-bold text-sm transition-all shadow-lg shadow-primary/20"
               >
-                Start Free Trial
+                Get Started
               </Link>
             </>
           )}
@@ -104,7 +103,7 @@ export default function LandingNavbar() {
               onClick={() => setMobileOpen(false)}
               className="bg-primary text-white text-sm font-bold text-center py-3.5 rounded-xl"
             >
-              Start Free Trial
+              Get Started
             </Link>
           </div>
         </div>

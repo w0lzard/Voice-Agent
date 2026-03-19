@@ -1,16 +1,16 @@
 'use client';
 
 import Link from 'next/link';
-import { usePathname, useRouter } from 'next/navigation';
+import { usePathname } from 'next/navigation';
 import { useAuth } from './AuthProvider';
 
 const navItems = [
   { href: '/dashboard', icon: 'dashboard', label: 'Dashboard' },
   { href: '/voice', icon: 'mic', label: 'Voice Agents' },
-  { href: '/clients', icon: 'campaign', label: 'Campaigns' },
   { href: '/wallet', icon: 'account_balance_wallet', label: 'Wallet' },
   { href: '/knowledge-bases', icon: 'database', label: 'Knowledge Base' },
   { href: '/calls', icon: 'history', label: 'Call History' },
+  { href: '/admins', icon: 'admin_panel_settings', label: 'Admins' },
   { href: '/csv', icon: 'analytics', label: 'Analytics' },
 ];
 
@@ -21,7 +21,6 @@ const bottomNavItems = [
 
 export default function Sidebar() {
   const pathname = usePathname();
-  const router = useRouter();
   const { user, logout } = useAuth();
 
   const isActive = (href) => {

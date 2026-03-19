@@ -149,12 +149,67 @@ export default function ProfilePage() {
     { id: 'danger', label: 'Danger Zone' },
   ];
 
+  // Mock admin account details (replace with real data when backend is ready)
+  const mockAccountDetails = {
+    totalCalls: 1284,
+    activeAgents: 4,
+    joinedDate: activeUser.created_at ? new Date(activeUser.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }) : 'January 15, 2024',
+    lastLogin: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
+  };
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
       <div>
         <h1 className="text-xl font-bold text-slate-100">Profile & Settings</h1>
         <p className="text-sm text-slate-500 mt-0.5">Manage your account details and security credentials</p>
+      </div>
+
+      {/* Admin Profile Overview Card */}
+      <div className="rounded-2xl border border-primary/20 p-6" style={{ background: 'linear-gradient(135deg, rgba(43,108,238,0.08) 0%, rgba(255,255,255,0.02) 100%)' }}>
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-5">
+          {/* Avatar */}
+          <div className="size-20 rounded-2xl bg-gradient-to-br from-primary to-purple-600 flex items-center justify-center text-white text-3xl font-black shrink-0" style={{ boxShadow: '0 0 24px rgba(43,108,238,0.35)' }}>
+            {activeUser.name?.charAt(0)?.toUpperCase() || 'A'}
+          </div>
+
+          {/* Info */}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-3 flex-wrap mb-1">
+              <h2 className="text-lg font-bold text-slate-100">{activeUser.name || 'Admin User'}</h2>
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-primary/15 text-primary uppercase tracking-wider">
+                <span className="material-symbols-outlined text-[12px]">shield</span>
+                {user?.role || 'Admin'}
+              </span>
+              <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-bold bg-emerald-500/10 text-emerald-400 uppercase tracking-wider">
+                <span className="size-1.5 rounded-full bg-emerald-400 inline-block" />
+                Active
+              </span>
+            </div>
+            <p className="text-sm text-slate-400 mb-3">{activeUser.email}</p>
+            <div className="flex flex-wrap gap-x-6 gap-y-2">
+              {[
+                { icon: 'call', label: 'Total Calls', value: mockAccountDetails.totalCalls.toLocaleString() },
+                { icon: 'mic', label: 'Active Agents', value: mockAccountDetails.activeAgents },
+                { icon: 'calendar_today', label: 'Member Since', value: mockAccountDetails.joinedDate },
+                { icon: 'schedule', label: 'Last Login', value: mockAccountDetails.lastLogin },
+              ].map(item => (
+                <div key={item.label} className="flex items-center gap-1.5">
+                  <span className="material-symbols-outlined text-slate-500 text-[14px]">{item.icon}</span>
+                  <span className="text-[11px] text-slate-500">{item.label}:</span>
+                  <span className="text-[11px] font-semibold text-slate-300">{item.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Plan badge */}
+          <div className="rounded-xl border border-purple-500/20 bg-purple-500/5 px-4 py-3 text-center shrink-0">
+            <span className="material-symbols-outlined text-purple-400 text-xl">workspace_premium</span>
+            <p className="text-xs font-bold text-purple-300 mt-1">{user?.plan || 'Pro'}</p>
+            <p className="text-[10px] text-slate-600 uppercase tracking-wider">Plan</p>
+          </div>
+        </div>
       </div>
 
       {/* Tabs */}

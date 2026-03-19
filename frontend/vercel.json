@@ -1,4 +1,18 @@
 {
-    "version": 2,
-    "name": "voice-agent-frontend"
+  "version": 2,
+  "name": "voice-agent-frontend",
+  "framework": "nextjs",
+  "buildCommand": "npm run build",
+  "outputDirectory": ".next",
+  "installCommand": "npm install",
+  "env": {
+    "GATEWAY_URL": "@gateway_url"
+  },
+  "build": {
+    "env": {
+      "NEXT_PUBLIC_API_BASE": "@next_public_api_base",
+      "NEXT_PUBLIC_WS_SERVER": "@next_public_ws_server",
+      "NEXT_PUBLIC_LIVEKIT_URL": "@next_public_livekit_url"
+    }
+  }
 }

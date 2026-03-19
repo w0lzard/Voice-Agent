@@ -1,17 +1,21 @@
 import Link from 'next/link';
 
 const WAVE_BARS = [
-  { height: 'h-8', opacity: 'opacity-40' },
-  { height: 'h-12', opacity: 'opacity-50' },
-  { height: 'h-20', opacity: 'opacity-70' },
-  { height: 'h-16', opacity: 'opacity-60' },
-  { height: 'h-24', opacity: 'opacity-100' },
+  { height: 'h-8',    opacity: 'opacity-40' },
+  { height: 'h-12',   opacity: 'opacity-50' },
+  { height: 'h-20',   opacity: 'opacity-70' },
+  { height: 'h-16',   opacity: 'opacity-60' },
+  { height: 'h-24',   opacity: 'opacity-100' },
   { height: 'h-[72px]', opacity: 'opacity-80' },
-  { height: 'h-12', opacity: 'opacity-50' },
-  { height: 'h-8', opacity: 'opacity-40' },
+  { height: 'h-12',   opacity: 'opacity-50' },
+  { height: 'h-8',    opacity: 'opacity-40' },
 ];
 
-const AVATAR_COLORS = ['bg-slate-800', 'bg-slate-700', 'bg-slate-600'];
+const STATS = [
+  { value: '10M+', label: 'Calls Placed' },
+  { value: '50+',  label: 'Languages' },
+  { value: '98%',  label: 'Uptime SLA' },
+];
 
 export default function HeroSection() {
   return (
@@ -19,7 +23,7 @@ export default function HeroSection() {
       {/* Ambient background glow */}
       <div
         className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[900px] h-[900px] rounded-full pointer-events-none"
-        style={{ background: 'radial-gradient(circle, rgba(43,108,238,0.08) 0%, transparent 70%)' }}
+        style={{ background: 'radial-gradient(circle, rgba(43,108,238,0.10) 0%, transparent 70%)' }}
         aria-hidden="true"
       />
 
@@ -30,21 +34,24 @@ export default function HeroSection() {
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-primary/10 border border-primary/20 mb-6">
             <span className="flex h-2 w-2 rounded-full bg-primary animate-pulse" aria-hidden="true" />
             <span className="text-xs font-bold uppercase tracking-wider text-primary">
-              Next-Gen Real Estate AI
+              AI Voice Agent Platform
             </span>
           </div>
 
           {/* Headline */}
-          <h1 className="text-5xl md:text-7xl font-black leading-[1.1] mb-8">
+          <h1 className="text-5xl md:text-7xl font-black leading-[1.1] mb-6">
             <span className="bg-gradient-to-r from-white via-white to-slate-400 bg-clip-text text-transparent">
-              AI Voice Agents That Call Your Real Estate Leads{' '}
+              Human-like AI calling that{' '}
             </span>
-            <span className="text-primary">Intelligently</span>
+            <span className="text-primary">converts</span>
+            <span className="bg-gradient-to-r from-white via-white to-slate-400 bg-clip-text text-transparent">
+              , not just talks
+            </span>
           </h1>
 
           <p className="text-lg md:text-xl text-slate-400 max-w-2xl mx-auto lg:mx-0 mb-10 leading-relaxed">
-            Automate lead qualification, appointment booking, and customer follow-ups with
-            human-like AI voice agents that never sleep.
+            Deploy AI voice agents that speak naturally in 50+ languages, handle objections in
+            real-time, and book qualified appointments — 24/7, at scale.
           </p>
 
           {/* CTA buttons */}
@@ -53,7 +60,7 @@ export default function HeroSection() {
               href="/signup"
               className="w-full sm:w-auto bg-primary hover:bg-primary/90 text-white px-8 py-4 rounded-xl font-bold text-lg transition-all shadow-xl shadow-primary/30 flex items-center justify-center gap-2"
             >
-              Start Free Trial
+              Get Started
               <span className="material-symbols-outlined" aria-hidden="true">arrow_forward</span>
             </Link>
             <Link
@@ -65,17 +72,16 @@ export default function HeroSection() {
             </Link>
           </div>
 
-          {/* Social proof */}
-          <div className="mt-10 flex items-center justify-center lg:justify-start gap-4 text-slate-500 text-sm">
-            <div className="flex -space-x-2" aria-hidden="true">
-              {AVATAR_COLORS.map((color, i) => (
-                <div
-                  key={i}
-                  className={`w-8 h-8 rounded-full border-2 border-[#020617] ${color}`}
-                />
-              ))}
-            </div>
-            <span>Joined by 2,000+ top-producing agents</span>
+          {/* Stats row */}
+          <div className="mt-12 flex flex-wrap items-center justify-center lg:justify-start gap-8">
+            {STATS.map(stat => (
+              <div key={stat.label} className="text-center lg:text-left">
+                <div className="text-2xl font-black text-white">{stat.value}</div>
+                <div className="text-xs text-slate-500 font-medium uppercase tracking-wider mt-0.5">
+                  {stat.label}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -95,8 +101,8 @@ export default function HeroSection() {
                   <span className="material-symbols-outlined text-white" aria-hidden="true">graphic_eq</span>
                 </div>
                 <div>
-                  <h3 className="font-bold text-white">Live AI Demo</h3>
-                  <p className="text-xs text-slate-400">Press play to hear the AI in action</p>
+                  <h3 className="font-bold text-white">Live AI Agent</h3>
+                  <p className="text-xs text-slate-400">Press play to hear it in action</p>
                 </div>
               </div>
               <span className="px-3 py-1 rounded-md bg-green-500/10 text-green-400 text-xs font-bold uppercase">
@@ -114,7 +120,6 @@ export default function HeroSection() {
                   />
                 ))}
               </div>
-              {/* Progress bar */}
               <div className="flex items-center justify-between text-xs text-slate-500 font-mono">
                 <span>00:12</span>
                 <div className="flex-1 mx-4 h-1 bg-white/10 rounded-full relative">
@@ -127,11 +132,16 @@ export default function HeroSection() {
             {/* Play button */}
             <button
               className="relative w-full glass hover:bg-white/10 text-white p-4 rounded-xl flex items-center justify-center gap-3 transition-colors font-bold group-hover:border-primary/40"
-              aria-label="Play example: Seller Lead Qualifying"
+              aria-label="Play example AI call"
             >
               <span className="material-symbols-outlined fill-1" aria-hidden="true">play_arrow</span>
-              Hear Example: Seller Lead Qualifying
+              Hear Example: Outbound Sales Call
             </button>
+
+            {/* Real-time tag */}
+            <p className="mt-4 text-center text-xs text-slate-600 font-medium">
+              Real-time speech · Natural interruptions · Zero latency
+            </p>
           </div>
         </div>
       </div>

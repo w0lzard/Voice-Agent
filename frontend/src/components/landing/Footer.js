@@ -1,30 +1,30 @@
 import Link from 'next/link';
 
 const PRODUCT_LINKS = [
-  ['Features', '#features'],
-  ['Voices', '#'],
-  ['Integrations', '#integrations'],
-  ['API Docs', '#'],
+  ['Features',     '#features'],
+  ['How it Works', '#how-it-works'],
+  ['Demo',         '#demo'],
+  ['API Docs',     '#'],
+  ['Pricing',      '/pricing'],
 ];
 
 const COMPANY_LINKS = [
-  ['About Us', '/about'],
-  ['Careers', '#'],
-  ['Blog', '#'],
-  ['Privacy', '#'],
+  ['About Us',  '/about'],
+  ['Careers',   '#'],
+  ['Blog',      '#'],
+  ['Privacy',   '#'],
 ];
 
 const SOCIAL_LINKS = [
-  { icon: 'public', label: 'Website', href: '#' },
-  { icon: 'share', label: 'Social', href: '#' },
-  { icon: 'mail', label: 'Email', href: '#' },
+  { icon: 'public',  label: 'Website', href: '#' },
+  { icon: 'share',   label: 'Social',  href: '#' },
+  { icon: 'mail',    label: 'Email',   href: '#' },
 ];
 
 export default function LandingFooter() {
   return (
     <footer className="py-20 px-6 border-t border-white/5 bg-slate-950">
       <div className="max-w-7xl mx-auto">
-        {/* Top grid */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-12 mb-16">
           {/* Brand column */}
           <div className="md:col-span-2">
@@ -40,11 +40,10 @@ export default function LandingFooter() {
             </Link>
 
             <p className="text-slate-500 max-w-sm mb-8 leading-relaxed text-sm">
-              The world&apos;s most advanced AI voice platform designed specifically for the real
-              estate industry. Transform how you handle leads.
+              Human-like AI calling that converts, not just talks. Deploy voice agents
+              at scale in 50+ languages — 24/7, zero downtime.
             </p>
 
-            {/* Social icons */}
             <div className="flex gap-3">
               {SOCIAL_LINKS.map(social => (
                 <a
@@ -103,7 +102,7 @@ export default function LandingFooter() {
         {/* Bottom bar */}
         <div className="pt-10 border-t border-white/5 flex flex-col md:flex-row items-center justify-between gap-6">
           <p className="text-[11px] text-slate-600 font-bold uppercase tracking-widest">
-            © {new Date().getFullYear()} VoiceAI Technologies Inc. All rights reserved.
+            &copy; {new Date().getFullYear()} AI Voice Agent Platform. All rights reserved.
           </p>
           <nav className="flex gap-8" aria-label="Legal links">
             {['Terms of Service', 'Privacy Policy', 'Security'].map(label => (
