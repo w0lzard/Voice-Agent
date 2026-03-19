@@ -26,13 +26,13 @@ logger = logging.getLogger("layer2-fillers")
 # ─── Filler pools ────────────────────────────────────────────────────────────
 
 _HINDI_FILLERS = [
-    "Haan ji...",
-    "Achha...",
-    "Bilkul...",
-    "Hmm...",
+    "Haan ji, samajh rahi hoon...",
+    "Achha ji...",
+    "Bilkul, ek second...",
+    "Haan, dekhti hoon...",
     "Theek hai, ek second...",
     "Ji, samajh gayi...",
-    "Dekhti hoon...",
+    "Dekhti hoon abhi...",
 ]
 
 _ENGLISH_FILLERS = [
@@ -40,8 +40,8 @@ _ENGLISH_FILLERS = [
     "One moment please...",
     "Sure, give me a second...",
     "Got it, just a moment...",
-    "Hmm, let me see...",
-    "Okay...",
+    "Alright, let me see...",
+    "Okay, one moment...",
 ]
 
 _HINGLISH_FILLERS = [
