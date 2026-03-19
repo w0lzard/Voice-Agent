@@ -195,9 +195,15 @@ class _SarvamStream(tts.ChunkedStream):
                 loudness=self._loudness,
             )
         except asyncio.CancelledError:
-            return
+            output_emitter.push(b"\x00" * stride)
+            raise
         except Exception as exc:
             logger.error("Sarvam TTS fetch failed: %s", exc)
+            output_emitter.push(b"\x00" * stride)
+            return
+
+        if not pcm:
+            output_emitter.push(b"\x00" * stride)
             return
 
         # Emit audio in _FRAME_MS-sized chunks
