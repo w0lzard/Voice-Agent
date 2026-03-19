@@ -86,6 +86,7 @@ def get_realtime_model(voice_config: dict) -> Any:
         model=model,
         voice=voice_id,
         temperature=temperature,
+        api_key=os.getenv("OPENAI_API_KEY"),
     )
 
 

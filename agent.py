@@ -661,7 +661,7 @@ def _build_realtime_llm():
         model=model,
         voice=voice,
         temperature=_get_float_env("OPENAI_REALTIME_TEMPERATURE", 0.7),
-        instructions=_build_agent_instructions(),
+        api_key=os.getenv("OPENAI_API_KEY"),
     )
 
 
