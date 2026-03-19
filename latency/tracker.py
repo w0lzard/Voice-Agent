@@ -197,7 +197,8 @@ class LatencyTracker:
     async def _broadcast(self, ev: LatencyEvent) -> None:
         """Fire-and-forget POST to ws_server. Silently ignored if server not running."""
         try:
-            async with aiohttp.ClientSession() as s:
+            connector = aiohttp.TCPConnector(force_close=True)
+            async with aiohttp.ClientSession(connector=connector) as s:
                 await s.post(
                     self._ws_url,
                     json=ev.to_dict(),

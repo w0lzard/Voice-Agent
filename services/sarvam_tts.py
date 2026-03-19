@@ -132,6 +132,12 @@ async def _fetch_audio(
     return pcm
 
 
+# STT engine noise tokens that should never be synthesized as speech
+_NOISE_TOKENS = frozenset({
+    "<noise>", "<crosstalk>", "<inaudible>", "<silence>",
+    "[noise]", "[crosstalk]", "[inaudible]", "[silence]",
+})
+
 # ── LiveKit TTS plugin ────────────────────────────────────────────────────────
 
 class _SarvamStream(tts.ChunkedStream):
@@ -164,6 +170,13 @@ class _SarvamStream(tts.ChunkedStream):
             num_channels=_CHANNELS,
             mime_type="audio/pcm",
         )
+
+        # Noise tokens (e.g. <noise>, <silence>) must not be sent to Sarvam —
+        # push one frame of silence so the framework sees a valid (but inaudible)
+        # synthesis instead of retrying 3× with "no audio frames" errors.
+        if self._input_text.strip().lower() in _NOISE_TOKENS:
+            output_emitter.push(b"\x00" * stride)
+            return
 
         try:
             pcm = await _fetch_audio(

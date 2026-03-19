@@ -960,7 +960,8 @@ async def _speak_scripted_line(
 async def _broadcast_interim(transcript: str, call_id: str) -> None:
     """Fire-and-forget POST of an interim (partial) Deepgram transcript to ws_server."""
     try:
-        async with aiohttp.ClientSession() as _s:
+        connector = aiohttp.TCPConnector(force_close=True)
+        async with aiohttp.ClientSession(connector=connector) as _s:
             await _s.post(
                 "http://localhost:8090/event",
                 json={
@@ -1517,10 +1518,44 @@ async def entrypoint(ctx: agents.JobContext):
             # noise can't push carrier_done_at forward indefinitely (20-30 s bug).
             carrier_max_wait = _get_float_env("CARRIER_MAX_WAIT_SEC", 8.0)
 
+            # In pipeline mode (Deepgram + OpenAI), there's no Gemini WebSocket to
+            # warm up — the session is ready immediately.  Use 0 warmup so the
+            # greeting can fire as soon as the carrier window elapses.
+            if _pipeline_mode:
+                warmup_sec = 0.0
+
             gemini_ready_at = _entrypoint_start_at + warmup_sec
             answered_at = _call_answered_at[0] or time.time()
             carrier_done_at = answered_at + carrier_wait  # static fallback
             carrier_absolute_deadline = answered_at + carrier_max_wait
+
+            # Pre-warm greeting TTS during the carrier wait so the audio is
+            # already cached when the greeting fires (saves ~1-2 s of live TTS).
+            async def _prewarm_greeting_tts() -> None:
+                try:
+                    import re
+                    from services.sarvam_tts import _fetch_audio as _sarvam_fetch
+                    # Split into sentences to match blingfire sentence tokenizer splits
+                    sentences = [
+                        s.strip()
+                        for s in re.split(r"(?<=[.!?])\s+", first_message)
+                        if s.strip()
+                    ]
+                    if not sentences:
+                        sentences = [first_message]
+                    for sent in sentences:
+                        await _sarvam_fetch(
+                            sent,
+                            api_key=_tts._api_key,
+                            speaker=_tts._speaker,
+                            model=_tts._model,
+                            language=_tts._language,
+                        )
+                    logger.debug("Greeting TTS pre-warmed (%d sentence(s))", len(sentences))
+                except Exception as _pw_err:
+                    logger.debug("Greeting TTS prewarm skipped: %s", _pw_err)
+
+            asyncio.ensure_future(_prewarm_greeting_tts())
 
             user_spoke_before_greeting = False
             while True:
@@ -1574,7 +1609,8 @@ async def entrypoint(ctx: agents.JobContext):
                     session.interrupt()
                 except Exception:
                     pass
-                await asyncio.sleep(0.3)  # let Gemini settle after interrupt
+                # Pipeline mode (OpenAI) needs minimal settle time; Gemini needs ~300ms.
+                await asyncio.sleep(0.1 if _pipeline_mode else 0.3)
 
             # Fire greeting unconditionally (always — regardless of user_spoke_before_greeting).
             # One retry on transient failure.
