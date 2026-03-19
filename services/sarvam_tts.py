@@ -182,6 +182,7 @@ class _SarvamStream(tts.ChunkedStream):
         # synthesis instead of retrying 3× with "no audio frames" errors.
         if self._input_text.strip().lower() in _NOISE_TOKENS:
             output_emitter.push(b"\x00" * stride)
+            output_emitter.end()
             return
 
         try:
@@ -196,14 +197,17 @@ class _SarvamStream(tts.ChunkedStream):
             )
         except asyncio.CancelledError:
             output_emitter.push(b"\x00" * stride)
+            output_emitter.end()
             raise
         except Exception as exc:
             logger.error("Sarvam TTS fetch failed: %s", exc)
             output_emitter.push(b"\x00" * stride)
+            output_emitter.end()
             return
 
         if not pcm:
             output_emitter.push(b"\x00" * stride)
+            output_emitter.end()
             return
 
         # Emit audio in _FRAME_MS-sized chunks
@@ -215,6 +219,8 @@ class _SarvamStream(tts.ChunkedStream):
             if len(chunk) < stride:
                 chunk = chunk + b"\x00" * (stride - len(chunk))
             output_emitter.push(chunk)
+            
+        output_emitter.end()
 
 
 class SarvamTTS(tts.TTS):
