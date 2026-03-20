@@ -117,7 +117,16 @@ async def _fetch_audio(
                     continue
                     
                 data = await resp.json()
-                audio_b64 = data["audios"][0]["audio_base64"]
+                
+                # Validate response structure
+                if "audios" not in data or not data["audios"]:
+                    raise RuntimeError(f"Sarvam TTS: No audio data in response")
+                
+                audio_data = data["audios"][0]
+                if "audio_base64" not in audio_data:
+                    raise RuntimeError(f"Sarvam TTS: No audio_base64 in response")
+                    
+                audio_b64 = audio_data["audio_base64"]
                 audio_bytes = base64.b64decode(audio_b64)
                 
                 # Convert to PCM format
