@@ -94,9 +94,9 @@ class Config:
     # Debug — set DEBUG=true to include OTP in API response when email fails
     DEBUG = os.getenv("DEBUG", "false").strip().lower() == "true"
 
-    # Server
+    # Server — Railway injects $PORT at runtime; 8080 for local dev.
     API_HOST = os.getenv("API_HOST", "0.0.0.0")
-    API_PORT = int(os.getenv("PORT") or os.getenv("API_PORT", "8081"))
+    API_PORT = int(os.getenv("PORT", "8080"))
     
     # Internal Service Auth
     INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "vobiz_internal_secret_key_123")
