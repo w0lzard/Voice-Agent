@@ -78,7 +78,7 @@ SARVAM_CONFIG = {
     # Voice settings
     "speaker": "arya",
     "language": "hi-IN",
-    "model": "bulbul:v1",
+    "model": "bulbul:v2",           # Latest Bulbul v2 model for better quality
     
     # Audio quality
     "sample_rate": 24000,
