@@ -118,21 +118,38 @@ async def _fetch_audio(
                     
                 data = await resp.json()
                 
+                # Debug: Log the full response structure
+                logger.debug(f"Sarvam API response: {data}")
+                
                 # Validate response structure
                 if "audios" not in data or not data["audios"]:
+                    logger.error(f"Sarvam TTS: Invalid response structure - missing 'audios': {data}")
                     raise RuntimeError(f"Sarvam TTS: No audio data in response")
                 
                 audio_data = data["audios"][0]
                 if "audio_base64" not in audio_data:
+                    logger.error(f"Sarvam TTS: Invalid audio data - missing 'audio_base64': {audio_data}")
+                    # Check if there's an error message in the response
+                    if "error" in data:
+                        raise RuntimeError(f"Sarvam TTS API error: {data['error']}")
                     raise RuntimeError(f"Sarvam TTS: No audio_base64 in response")
                     
                 audio_b64 = audio_data["audio_base64"]
-                audio_bytes = base64.b64decode(audio_b64)
+                if not audio_b64:
+                    raise RuntimeError(f"Sarvam TTS: Empty audio_base64 in response")
+                    
+                try:
+                    audio_bytes = base64.b64decode(audio_b64)
+                except Exception as e:
+                    raise RuntimeError(f"Sarvam TTS: Failed to decode audio_base64: {e}")
                 
                 # Convert to PCM format
-                pcm, sr = _wav_to_pcm(audio_bytes)
-                pcm = _resample_mono16(pcm, sr, _SAMPLE_RATE)
-                return pcm
+                try:
+                    pcm, sr = _wav_to_pcm(audio_bytes)
+                    pcm = _resample_mono16(pcm, sr, _SAMPLE_RATE)
+                    return pcm
+                except Exception as e:
+                    raise RuntimeError(f"Sarvam TTS: Failed to process audio: {e}")
                 
         except (aiohttp.ClientError, asyncio.TimeoutError) as e:
             if attempt == max_retries - 1:
