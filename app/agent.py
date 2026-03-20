@@ -1,6 +1,6 @@
+import os
 import asyncio
 import logging
-import os
 import json
 import time
 import tempfile
@@ -8,12 +8,12 @@ import threading
 import sys
 from pathlib import Path
 
+# Automatically map Railway's dynamic PORT to LiveKit's HTTP server
+# Locally, we use 0 (random free port) to avoid conflict with other services
+os.environ["LIVEKIT_HTTP_SERVER_PORT"] = os.getenv("PORT", "0")
+
 from dotenv import load_dotenv
 import aiohttp
-
-# Automatically map Railway's dynamic PORT to LiveKit's HTTP server
-if os.getenv("PORT"):
-    os.environ["LIVEKIT_HTTP_SERVER_PORT"] = os.getenv("PORT")
 
 # ── DEBUG: Verifying path and package ─────────────────────────────────────────
 import sys
