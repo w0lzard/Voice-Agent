@@ -204,6 +204,11 @@ def _remember_manual_agent_text(session, text: str, *, resolves_turn: bool) -> N
         }
     )
     session._manual_agent_texts = manual[-_MANUAL_TEXT_WINDOW:]
+    
+    # Track recent assistant responses for anti-repetition
+    recent_assistant = getattr(session, "_recent_assistant_texts", [])
+    recent_assistant.append(text.strip())
+    session._recent_assistant_texts = recent_assistant[-5:]
 
 
 def _consume_manual_agent_text(session, text: str):
@@ -439,8 +444,14 @@ def _build_fast_reply(session, transcript: str) -> str | None:
     text_lower = _normalize_text(transcript)
     last_fast = state.get("last_fast_reply", "")
     last_assistant = (getattr(session, "_last_assistant_text", "") or "").strip()
+    recent_assistant = getattr(session, "_recent_assistant_texts", [])
     has_property_context = _has_property_context(text_lower, state)
     is_affirmation = any(phrase in text_lower for phrase in _AFFIRM_PHRASES)
+    
+    # Check if we've recently asked for name
+    recent_name_questions = [r for r in recent_assistant if "naam" in r.lower() or "name" in r.lower()]
+    if recent_name_questions:
+        return None  # Don't ask name again if asked recently
 
     def choose(options: list[str]) -> str:
         reply = _pick_variant(options, last_fast)
