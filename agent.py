@@ -1364,13 +1364,43 @@ async def entrypoint(ctx: agents.JobContext):
             session.history.add_message(content=transcript, role="user")
             return
 
-        # ── FILLER DISABLED — was causing leakage into final output ───────────
-        # Filler injection is completely disabled until the core pipeline is stable.
-        # The fast intent router above handles 80%+ of inputs with 0ms latency,
-        # making fillers unnecessary for most conversations.
+        # ── FILLER DISABLED — fillers caused leakage into final output ──────
 
+        # ── LLM Safety Net: fallback if LLM doesn't respond in 3s ─────────
+        # The LLM TTFB is 4-7s on gpt-4o-mini. If the fast intent didn't match,
+        # we let the LLM try but set a hard 3-second safety net. If the LLM
+        # hasn't produced any output by then, we fire a context-aware fallback
+        # so the caller never hears dead silence.
+        _llm_safety_speech_at = time.time()
 
+        async def _llm_safety_net():
+            await asyncio.sleep(3.0)
+            # If agent already spoke (LLM responded in time), skip.
+            if _last_agent_response_at[0] > _llm_safety_speech_at:
+                return
+            if _agent_is_speaking[0]:
+                return
+            # Determine fallback based on conversation memory
+            mem = getattr(session, '_conv_memory', None)
+            if mem:
+                if not mem.get('property_type'):
+                    fallback = "Flat, villa ya plot chahiye?"
+                elif not mem.get('location'):
+                    fallback = "Kaunsi location pasand hai?"
+                elif not mem.get('budget'):
+                    fallback = "Budget kitna socha hai?"
+                else:
+                    fallback = "Ji, aur kuch batayein?"
+            else:
+                fallback = "Ji, aap kaunsi property dekh rahe hain?"
+            logger.warning("⚡ LLM SAFETY NET: 3s timeout → sending fallback: %s", fallback)
+            try:
+                session.interrupt()
+            except Exception:
+                pass
+            await _speak_scripted_line(session, text=fallback)
 
+        asyncio.create_task(_llm_safety_net())
 
         # ── Layer 3 latency tracking: STT end → LLM start ─────────────────
         call_id = ctx.room.name
@@ -1384,9 +1414,9 @@ async def entrypoint(ctx: agents.JobContext):
             entry = _validate_transcript(transcript, role="user", call_id=call_id)
             asyncio.ensure_future(broadcast_transcript(entry))
 
-        # ── Layer 2: start filler monitor (cancelled when agent speaks) ────
-        if _HAS_LAYERS:
-            asyncio.ensure_future(_layer2.monitor_and_inject(session, time.time()))
+        # ── Layer 2: disabled (filler leakage) ─────────────────────────────
+        # if _HAS_LAYERS:
+        #     asyncio.ensure_future(_layer2.monitor_and_inject(session, time.time()))
 
     @session.on("conversation_item_added")
     def _on_conversation_item_added(ev) -> None:
@@ -1502,12 +1532,12 @@ async def entrypoint(ctx: agents.JobContext):
 
         async def _watchdog_agent_response() -> None:
             """
-            Safety net: if the user spoke but Gemini hasn't responded within
-            AGENT_RESPONSE_WATCHDOG_SEC (default 6s), force a generate_reply.
+            Safety net: if the user spoke but the agent hasn't responded within
+            AGENT_RESPONSE_WATCHDOG_SEC (default 2s), send a direct fallback
+            via TTS — bypassing the LLM entirely for instant recovery.
 
-            This recovers from the case where the user interrupts the agent's
-            greeting and Gemini's turn-detection silently fails to trigger the
-            next generation (a known Gemini Live edge case).
+            Previous approach used generate_reply() which itself takes 4-7s
+            through the LLM, defeating the purpose of the watchdog.
             """
             watchdog_sec = _get_float_env("AGENT_RESPONSE_WATCHDOG_SEC", 2.0)
             try:
@@ -1526,19 +1556,36 @@ async def entrypoint(ctx: agents.JobContext):
                         and user_spoke_ago < 30.0  # don't trigger if user left
                         and not _agent_is_speaking[0]
                     ):
+                        # Determine context-aware fallback from conversation memory
+                        mem = getattr(session, '_conv_memory', None)
+                        if mem:
+                            if not mem.get('property_type'):
+                                wd_fallback = "Flat, villa ya plot chahiye?"
+                            elif not mem.get('location'):
+                                wd_fallback = "Kaunsi location pasand hai?"
+                            elif not mem.get('budget'):
+                                wd_fallback = "Budget kitna socha hai?"
+                            else:
+                                wd_fallback = "Ji, aur kuch batayein?"
+                        else:
+                            wd_fallback = "Ji, aap kaunsi property dekh rahe hain?"
+
                         logger.warning(
-                            "Watchdog: user spoke %.1fs ago, agent silent. "
-                            "Forcing generate_reply to recover.",
-                            user_spoke_ago,
+                            "Watchdog: user spoke %.1fs ago, agent silent → "
+                            "sending direct fallback: '%s'",
+                            user_spoke_ago, wd_fallback,
                         )
-                        _last_agent_response_at[0] = now  # prevent re-trigger while recovering
+                        _last_agent_response_at[0] = now  # prevent re-trigger
                         try:
-                            await session.generate_reply(
-                                instructions="Respond naturally to what the user just said.",
-                                allow_interruptions=True,
-                            )
+                            session.interrupt()
+                        except Exception:
+                            pass
+                        try:
+                            await _speak_scripted_line(session, text=wd_fallback)
                         except Exception as wd_err:
-                            logger.debug("Watchdog generate_reply failed: %s", wd_err)
+                            logger.debug("Watchdog fallback failed: %s", wd_err)
+                            # Force-reset speaking flag so agent isn't permanently stuck
+                            _agent_is_speaking[0] = False
             except asyncio.CancelledError:
                 pass
 
