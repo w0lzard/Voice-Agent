@@ -2,11 +2,13 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/components/AuthProvider';
-import { AUTHORIZED_ADMIN_EMAIL, ADMIN_PASSWORD, isAuthorizedAdmin } from '@/lib/adminConfig';
+import { API_BASE } from '@/lib/api';
 
 export default function AdminLoginPage() {
     const { login } = useAuth();
+    const router = useRouter();
 
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
@@ -24,61 +26,40 @@ export default function AdminLoginPage() {
         }
 
         setLoading(true);
-        await new Promise(r => setTimeout(r, 600)); // simulate auth delay
-
-        // Step 1 — Check if this email is the authorised admin at all
-        if (!isAuthorizedAdmin(email)) {
-            setError('You are not authorized to access the admin panel.');
-            setLoading(false);
-            return;
-        }
-
-        // Step 2 — Check password
-        if (password !== ADMIN_PASSWORD) {
-            setError('Incorrect password. Please try again.');
-            setLoading(false);
-            return;
-        }
-
-        // Authorised — create admin session
-        const adminUser = {
-            name: 'Admin User',
-            email: AUTHORIZED_ADMIN_EMAIL,
-            role: 'Super Admin',
-            provider: 'local',
-            plan: 'Enterprise',
-            workspace_id: 'ws_admin_001',
-            created_at: '2024-01-15T00:00:00Z',
-        };
-
-        login('admin_token_' + Date.now(), adminUser);
-        setLoading(false);
-
-        /* --- BACKEND CALL (re-enable when ready) ---
         try {
-            const res = await fetch(`${API_BASE}/v1/admin/auth/login`, {
+            const res = await fetch(`${API_BASE}/v1/auth/login`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ email, password })
             });
             const data = await res.json();
+
             if (!res.ok || !data.ok) {
-                setError(data.error || 'Invalid admin credentials.');
+                if (data.needsVerification) {
+                    router.push(`/verify?email=${encodeURIComponent(data.email || email)}`);
+                    return;
+                }
+                setError(data.error || 'Invalid credentials.');
                 return;
             }
-            login(data.token, data.user);
+
+            // Verify admin role
+            if (data.user?.role !== 'admin') {
+                setError('Access Denied: Admin privileges required.');
+                return;
+            }
+
+            login(data.token, data.user, '/admin/dashboard');
         } catch {
             setError('Network error. Backend not reachable.');
         } finally {
             setLoading(false);
         }
-        ------------------------------------------ */
     };
 
     return (
         <div className="auth-page">
             <div className="auth-card">
-                {/* Logo */}
                 <div className="auth-logo">
                     <div
                         style={{
@@ -136,7 +117,7 @@ export default function AdminLoginPage() {
                         <label>Admin Email</label>
                         <input
                             type="email"
-                            placeholder="admin@voiceai.com"
+                            placeholder="admin@company.com"
                             value={email}
                             onChange={(e) => { setEmail(e.target.value); setError(''); }}
                             required
@@ -182,26 +163,6 @@ export default function AdminLoginPage() {
                         {loading ? 'Verifying...' : 'Access Dashboard'}
                     </button>
                 </form>
-
-                {/* Demo hint — shows the single authorised admin credential */}
-                <div style={{
-                    marginTop: 16,
-                    padding: '10px 14px',
-                    borderRadius: 8,
-                    background: 'rgba(255,255,255,0.03)',
-                    border: '1px solid rgba(255,255,255,0.07)',
-                }}>
-                    <p style={{ fontSize: 11, color: '#6b7280', margin: 0 }}>
-                        <span style={{ color: '#2b6cee', fontWeight: 700 }}>Demo: </span>
-                        <span
-                            style={{ cursor: 'pointer', textDecoration: 'underline', color: '#4b7cf3' }}
-                            onClick={() => { setEmail(AUTHORIZED_ADMIN_EMAIL); setPassword(ADMIN_PASSWORD); setError(''); }}
-                        >
-                            {AUTHORIZED_ADMIN_EMAIL}
-                        </span>
-                        {' '}/ <span style={{ fontFamily: 'monospace', color: '#9ca3af' }}>{ADMIN_PASSWORD}</span>
-                    </p>
-                </div>
 
                 <div className="auth-footer" style={{ marginTop: 20 }}>
                     Not an admin?{' '}

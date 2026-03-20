@@ -113,3 +113,18 @@ def require_auth(
             detail="Authentication required",
         )
     return user
+
+
+def require_admin(
+    user: User = Depends(require_auth),
+) -> User:
+    """
+    Dependency that requires the authenticated user to have the 'admin' role.
+    Use as a FastAPI dependency on admin-only routes.
+    """
+    if user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+    return user
