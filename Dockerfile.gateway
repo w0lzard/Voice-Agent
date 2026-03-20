@@ -19,11 +19,7 @@ COPY backend/services ./services
 
 RUN mkdir -p /app/logs
 
-# Default port for local dev; Railway overrides $PORT at runtime.
-ENV PORT=8080
-
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD sh -c "curl -fsS http://127.0.0.1:${PORT}/health || exit 1"
+    CMD sh -c "curl -fsS http://127.0.0.1:${PORT:-8000}/health || exit 1"
 
-# Shell form so $PORT is expanded at runtime.
-CMD sh -c "uvicorn services.gateway.main:app --host 0.0.0.0 --port ${PORT} --proxy-headers --forwarded-allow-ips '*'"
+CMD ["python", "services/gateway/run_server.py"]

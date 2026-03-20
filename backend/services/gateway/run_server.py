@@ -13,19 +13,22 @@ sys.path.insert(0, "/app")
 # For local dev, add parent dirs
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("gateway-runner")
 
 
 if __name__ == "__main__":
-    host = os.getenv("API_HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", "8080"))
-    reload_enabled = os.getenv("UVICORN_RELOAD", "false").lower() == "true"
+    host = "0.0.0.0"
+    port = int(os.environ.get("PORT", 8000))
+
+    print(f"USING PORT: {port}")
+    print(f"ENV $PORT = {os.environ.get('PORT', '<not set>')}")
     logger.info("Starting gateway on %s:%s", host, port)
+
     uvicorn.run(
         "services.gateway.main:app",
         host=host,
         port=port,
-        reload=reload_enabled,
         proxy_headers=True,
         forwarded_allow_ips="*",
     )
