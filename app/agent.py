@@ -1595,9 +1595,9 @@ async def entrypoint(ctx: agents.JobContext):
             tts=_tts,
             tools=fnc_ctx.flatten(),
             allow_interruptions=True,
-            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.05),
-            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.18),
-            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.35),
+            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.01),
+            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.08),
+            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.2),
             user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
         )
         if _vad is not None:
@@ -1610,9 +1610,9 @@ async def entrypoint(ctx: agents.JobContext):
             tools=fnc_ctx.flatten(),
             turn_detection="realtime_llm",
             allow_interruptions=True,
-            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.05),
-            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.18),
-            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.35),
+            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.01),
+            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.08),
+            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.2),
             user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
         )
 
@@ -1817,7 +1817,7 @@ async def entrypoint(ctx: agents.JobContext):
             )
 
         async def _llm_safety_net():
-            await asyncio.sleep(_get_float_env("LLM_SAFETY_TIMEOUT_SEC", 8.0))
+            await asyncio.sleep(_get_float_env("LLM_SAFETY_TIMEOUT_SEC", 3.0))
             if not _turn_still_pending(turn_id) or _user_state[0] == "speaking" or _agent_state[0] == "speaking":
                 return
             _cancel_task(_layer2_task)

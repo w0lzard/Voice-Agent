@@ -111,7 +111,7 @@ async def _fetch_audio(
                 "speech_sample_rate":   _SAMPLE_RATE,
                 "enable_preprocessing": True,
             },
-            timeout=aiohttp.ClientTimeout(total=12),
+            timeout=aiohttp.ClientTimeout(total=5),
         )
         if resp.status != 200:
             body = await resp.text()
