@@ -17,12 +17,19 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("gateway-runner")
 
 
-if __name__ == "__main__":
-    host = "0.0.0.0"
-    port = int(os.environ.get("PORT", 8000))
+def _resolve_bind_host() -> str:
+    return os.getenv("API_HOST", "0.0.0.0")
 
-    print(f"USING PORT: {port}")
-    print(f"ENV $PORT = {os.environ.get('PORT', '<not set>')}")
+
+def _resolve_bind_port() -> int:
+    """Prefer Railway's $PORT; fall back to 8000 for local development."""
+    port = os.getenv("PORT")
+    return int(port) if port else 8000
+
+
+if __name__ == "__main__":
+    host = _resolve_bind_host()
+    port = _resolve_bind_port()
     logger.info("Starting gateway on %s:%s", host, port)
 
     uvicorn.run(
