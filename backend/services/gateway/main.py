@@ -130,11 +130,11 @@ app = create_app()
 if __name__ == "__main__":
     import uvicorn
 
-    host = os.getenv("API_HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", "8080"))
+    port = int(os.environ.get("PORT", 8000))
+    print(f"USING PORT: {port}")
     uvicorn.run(
         "gateway.main:app",
-        host=host,
+        host="0.0.0.0",
         port=port,
         reload=os.getenv("UVICORN_RELOAD", "false").lower() == "true",
         proxy_headers=True,
