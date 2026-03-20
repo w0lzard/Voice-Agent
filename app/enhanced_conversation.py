@@ -12,11 +12,13 @@ from dataclasses import dataclass
 
 # Import original functions from main agent
 try:
-    from .agent import _build_fast_reply, _speak_scripted_line
+    from .agent import _build_fast_reply
 except ImportError:
     # For testing or standalone usage
     _build_fast_reply = None
-    _speak_scripted_line = None
+
+# Use original _speak_scripted_line directly
+_speak_scripted_line = None
 
 @dataclass
 class ConversationState:
@@ -267,7 +269,10 @@ async def handle_user_transcribed(session, ev, original_handler):
 async def enhanced_speak_scripted_line(session, *, text: str, **kwargs):
     """
     Enhanced speaking with repetition prevention
+    Falls back to original _speak_scripted_line if available
     """
+    global _speak_scripted_line
+    
     # Check for repetition
     if conversation_manager.is_repetition(text):
         # Generate alternative response
@@ -280,7 +285,13 @@ async def enhanced_speak_scripted_line(session, *, text: str, **kwargs):
     conversation_manager.update_agent_state(True)
     
     try:
-        await _speak_scripted_line(session, text=text, **kwargs)
+        if _speak_scripted_line:
+            await _speak_scripted_line(session, text=text, **kwargs)
+        else:
+            # Fallback for testing
+            logger.warning("Original _speak_scripted_line not available, using fallback")
+            # This would need the actual implementation
+            pass
     finally:
         conversation_manager.update_agent_state(False)
 

@@ -1818,7 +1818,7 @@ async def entrypoint(ctx: agents.JobContext):
 
                 async def _deliver_fast_reply() -> None:
                     await _cancel_pending_model_reply(session)
-                    await enhanced_speak_scripted_line(
+                    await _speak_scripted_line(
                         session,
                         text=fast_reply,
                         allow_interruptions=True,
@@ -1827,6 +1827,9 @@ async def entrypoint(ctx: agents.JobContext):
 
                 asyncio.create_task(_deliver_fast_reply())
                 return
+            else:
+                # Fast path blocked by repetition or no match - continue to LLM
+                logger.info("FAST PATH blocked - continuing to LLM processing")
 
         # Add natural thinking delay for LLM processing
         await conversation_manager.add_thinking_delay(transcript)
