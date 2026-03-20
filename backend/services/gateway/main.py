@@ -129,12 +129,13 @@ app = create_app()
 
 if __name__ == "__main__":
     import uvicorn
-    from shared.settings import config
 
+    host = os.getenv("API_HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8080"))
     uvicorn.run(
         "gateway.main:app",
-        host=config.API_HOST,
-        port=config.API_PORT,
+        host=host,
+        port=port,
         reload=os.getenv("UVICORN_RELOAD", "false").lower() == "true",
         proxy_headers=True,
         forwarded_allow_ips="*",
