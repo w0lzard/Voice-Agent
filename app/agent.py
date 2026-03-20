@@ -554,18 +554,48 @@ def _build_fast_reply(session, transcript: str) -> str | None:
 
     if any(phrase in text_lower for phrase in _NEGATIVE_PHRASES):
         return choose([
-            "Theek hai, future mein zarurat ho to batayiyega.",
-            "Samajh gaya, kabhi bhi property help chahiye ho to batayiyega.",
+            "Samajh gaya, aapki khushi meri priority hai.",
+            "Theek hai, main aapki zaroorat samajh sakti hoon.",
+            "Accha, aapka time important hai. Main wait karungi.",
+        ])
+    
+    # Handle emotional needs with warmth
+    if ("mujhe chahiye" in text_lower or "i need" in text_lower or 
+        "meri zarurat" in text_lower or "help karo" in text_lower):
+        return choose([
+            "Main aapki har zarurat poori karungi, vada hai.",
+            "Aap tension mat lo, main hoon na aapke saath.",
+            "Aapki khushi meri zimmedari hai, bataiye kya chahiye.",
+        ])
+    
+    # Handle sad or emotional tone
+    if any(word in text_lower for word in ["sad", "dukhi", "upset", "tension", "parshan"]):
+        return choose([
+            "Aap pareshan mat ho, main aapki madad karungi.",
+            "Main samajh sakti hoon aapka dukh, batayiye kya baat hai.",
+            "Aap akla mat ho, main hoon na aapke liye.",
         ])
 
     if has_property_context and state["location"] and not state["budget"]:
-        return use_cached("Budget kya socha hai?")
+        return choose([
+            "Aapka sapno ghar kitne ka hoga, batayiye na?",
+            "Budget bata dijiye, main aapke liye best dilaungi.",
+            "Aapka comfort kitne ka hoga, mujhe bataiye.",
+        ])
 
     if has_property_context and state["budget"] and not state["property_type"]:
-        return use_cached("Ji, kis type ki property dekh rahe hain?")
+        return choose([
+            "Aapko kaisa ghar chahiye, batayiye apni preference.",
+            "Kya type ka ghar aapko sukoon dega, bataiye.",
+            "Aapki dream property kaisi hogi, describe kijiye.",
+        ])
 
     if has_property_context and state["property_type"] and not state["location"]:
-        return use_cached("Achha, kis area mein dekh rahe hain?")
+        return choose([
+            "Aapko kaisa area pasand hai, jahan aapko sukoon mile.",
+            "Kis location mein aapko apna ghar dekhna hai?",
+            "Aapka dream location kahan hai, main wahi dilaungi.",
+        ])
 
     if has_property_context and state["property_type"] and state["location"] and not state["budget"]:
         return use_cached("Budget kya socha hai?")
