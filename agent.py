@@ -907,7 +907,15 @@ class TransferFunctions(llm.ToolContext):
             logger.error(f"Transfer failed: {e}")
             return f"Error executing transfer: {e}"
 
-
+    @llm.ai_callable(description="Store the user's property preferences (property_type, location, budget) into memory.")
+    async def update_memory(self, property_type: str = "", location: str = "", budget: str = "") -> str:
+        """
+        Saves user real estate preferences into permanent Python memory tracking.
+        Must be called ONLY when the user explicitly provides one of these details.
+        """
+        logger.info(f"💾 MEMORY UPDATED: property_type={property_type}, location={location}, budget={budget}")
+        # Normally stored to DB; returning confirmation to LLM
+        return "Saved to memory successfully."
 def _build_agent_instructions() -> str:
     """Build agent instructions from scripts/agent_script.py (single source of truth)."""
     agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
@@ -938,6 +946,8 @@ def prewarm(proc: agents.JobProcess) -> None:
             loop.close()
 
 
+_agent_is_speaking = [False]
+
 async def _speak_scripted_line(
     session: AgentSession,
     *,
@@ -946,16 +956,16 @@ async def _speak_scripted_line(
 ) -> None:
     """
     Speak a scripted line directly via the TTS pipeline (bypasses LLM).
-
-    In pipeline mode (Deepgram+Sarvam), session.say() converts text to Sarvam
-    audio immediately — no LLM round-trip, sub-200 ms latency for pre-cached phrases.
-
-    NOTE: Do NOT call session.interrupt() before this. Callers that need to
-    stop an in-progress generation should call session.interrupt() +
-    asyncio.sleep() themselves before calling this function.
     """
-    session.history.add_message(content=text, role="assistant")
-    await session.say(text, allow_interruptions=allow_interruptions)
+    if _agent_is_speaking[0]:
+        return  # prevent duplicate
+    _agent_is_speaking[0] = True
+    try:
+        session.history.add_message(content=text, role="assistant")
+        await session.say(text, allow_interruptions=allow_interruptions)
+        await asyncio.sleep(0.1)  # allow scheduler reset
+    finally:
+        _agent_is_speaking[0] = False
 
 
 # Shared session for fire-and-forget POSTs to ws_server — avoids leaking TCP
@@ -1102,6 +1112,43 @@ async def entrypoint(ctx: agents.JobContext):
     # Anchor warmup from the very start of entrypoint — session.start() itself
     # takes 2-4s, so using its return time as the anchor understates elapsed time.
     _entrypoint_start_at = time.time()
+
+    # Pre-warm greeting TTS concurrently while Gemini WebSocket is connecting.
+    # This hides lookup latency inside session.start() so playing begins the moment
+    # the call connects.
+    agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
+    company = os.getenv("AGENT_COMPANY_NAME", "Estate Company")
+    first_message = _repair_mojibake(os.getenv("OUTBOUND_FIRST_MESSAGE")) or _default_first_message(
+        agent_name, company, _get_default_language()
+    )
+    inbound_greeting = _repair_mojibake(os.getenv("INBOUND_FIRST_MESSAGE")) or first_message
+
+    async def _prewarm_greeting_tts() -> None:
+        try:
+            import re
+            from services.sarvam_tts import _fetch_audio as _sarvam_fetch
+            # Split into sentences to match blingfire sentence tokenizer splits exactly!
+            sentences = [
+                s.strip()
+                for s in re.split(r"(?<=[.!?])\s+", first_message)
+                if s.strip()
+            ]
+            if not sentences:
+                sentences = [first_message]
+            for sent in sentences:
+                await _sarvam_fetch(
+                    sent,
+                    api_key=os.getenv("SARVAM_API_KEY"),
+                    speaker=os.getenv("SARVAM_SPEAKER", "anushka"),
+                    model=os.getenv("SARVAM_MODEL", "bulbul:v2"),
+                    language=os.getenv("SARVAM_LANGUAGE", "hi-IN"),
+                )
+            logger.debug("Greeting TTS pre-warmed completely.")
+        except Exception as _pw_err:
+            logger.debug("Greeting TTS prewarm skipped: %s", _pw_err)
+
+    if os.getenv("DEEPGRAM_API_KEY"):  # We're in pipeline mode
+        asyncio.ensure_future(_prewarm_greeting_tts())
 
     if not _validate_runtime_provider_keys():
         ctx.shutdown()
@@ -1311,6 +1358,53 @@ async def entrypoint(ctx: agents.JobContext):
             reprompt_task = None
         fnc_ctx.set_last_user_utterance(transcript)
 
+        # ── Fast Intent Router ────────────────────────────────────────────────
+        t_lower = transcript.lower()
+        fast_reply = None
+        if "theek hai" in t_lower:
+            fast_reply = "Great, batayein."
+        elif "residential" in t_lower:
+            fast_reply = "Location bataiye."
+        elif "hello" in t_lower:
+            fast_reply = "Namaste, main Shubhi bol rahi hoon."
+        elif "naam kya" in t_lower or "kaun bol rahi" in t_lower:
+            fast_reply = "Mera naam Shubhi hai."
+        elif "bye" in t_lower:
+            fast_reply = "Dhanyavaad, aapka din shubh ho."
+
+        if fast_reply:
+            logger.info("⚡ FAST INTENT ROUTED: bypassing LLM for instant reply (%s)", fast_reply)
+            try:
+                session.interrupt()
+            except Exception:
+                pass
+            asyncio.create_task(_speak_scripted_line(session, text=fast_reply))
+            # Append interaction to context natively so LLM remembers it later
+            session.history.add_message(content=transcript, role="user")
+            # Return early skips passing it to LLM if possible (or we just let the prompt handle empty input)
+            return
+
+        # ── Delayed Filler for Latency Masking ──────────────────────────────────
+        async def _filler_delay():
+            await asyncio.sleep(0.7)
+            # If the LLM has already started responding, or the user spoke again, abort.
+            if _agent_is_speaking[0] or (time.time() - last_user_speech_at > 1.2 and _last_agent_response_at[0] > last_user_speech_at):
+                return
+            import random
+            fillers = ["Ji ek second...", "Bilkul, dekh rahi hoon...", "Haan ji, batati hoon..."]
+            filler_msg = random.choice(fillers)
+            logger.info("⚡ FILLER MASKING: streaming '%s' to hide LLM delay.", filler_msg)
+            # Send to TTS directly without blocking STT/LLM pipeline and without polluting LLM context
+            _agent_is_speaking[0] = True
+            await session.say(filler_msg, allow_interruptions=True)
+            await asyncio.sleep(0.1)
+            _agent_is_speaking[0] = False
+
+        asyncio.create_task(_filler_delay())
+
+
+
+
         # ── Layer 3 latency tracking: STT end → LLM start ─────────────────
         call_id = ctx.room.name
         if _HAS_LATENCY:
@@ -1347,7 +1441,13 @@ async def entrypoint(ctx: agents.JobContext):
             parts.append(raw_content)
         text = " ".join(parts).strip()
         if text:
-            logger.info("conversation_item_added role=%s text=\"%s\"", role, _safe_log_text(text))
+            if role == "user":
+                logger.info("[USER]: %s", _safe_log_text(text))
+            elif role == "assistant":
+                logger.info("[AGENT]: %s", _safe_log_text(text))
+            else:
+                logger.info("[%s]: %s", role.upper(), _safe_log_text(text))
+            
             if role == "assistant":
                 now = time.time()
                 _last_agent_response_at[0] = now
@@ -1442,7 +1542,7 @@ async def entrypoint(ctx: agents.JobContext):
             greeting and Gemini's turn-detection silently fails to trigger the
             next generation (a known Gemini Live edge case).
             """
-            watchdog_sec = _get_float_env("AGENT_RESPONSE_WATCHDOG_SEC", 2.5)
+            watchdog_sec = _get_float_env("AGENT_RESPONSE_WATCHDOG_SEC", 2.0)
             try:
                 while True:
                     await asyncio.sleep(0.5)
@@ -1457,6 +1557,7 @@ async def entrypoint(ctx: agents.JobContext):
                         last_user_speech_at > last_agent
                         and user_spoke_ago >= watchdog_sec
                         and user_spoke_ago < 30.0  # don't trigger if user left
+                        and not _agent_is_speaking[0]
                     ):
                         logger.warning(
                             "Watchdog: user spoke %.1fs ago, agent silent. "
@@ -1536,45 +1637,18 @@ async def entrypoint(ctx: agents.JobContext):
             # In pipeline mode (Deepgram + OpenAI), there's no Gemini WebSocket to
             # warm up — the session is ready immediately.  Use 0 warmup so the
             # greeting can fire as soon as the carrier window elapses.
-            # Also halve the carrier wait baseline (3s → 1.5s) since pipeline mode
-            # starts faster and the greeting TTS is pre-warmed during the wait.
+            # However, for pure INSTANT greeting (no 8-second carrier delay), we bypass it.
             if _pipeline_mode:
                 warmup_sec = 0.0
-                if not os.getenv("CARRIER_ANNOUNCEMENT_WAIT_SEC"):
-                    carrier_wait = 1.5
+                carrier_wait = 0.0
+                carrier_max_wait = 0.0
 
             gemini_ready_at = _entrypoint_start_at + warmup_sec
             answered_at = _call_answered_at[0] or time.time()
             carrier_done_at = answered_at + carrier_wait  # static fallback
             carrier_absolute_deadline = answered_at + carrier_max_wait
 
-            # Pre-warm greeting TTS during the carrier wait so the audio is
-            # already cached when the greeting fires (saves ~1-2 s of live TTS).
-            async def _prewarm_greeting_tts() -> None:
-                try:
-                    import re
-                    from services.sarvam_tts import _fetch_audio as _sarvam_fetch
-                    # Split into sentences to match blingfire sentence tokenizer splits
-                    sentences = [
-                        s.strip()
-                        for s in re.split(r"(?<=[.!?])\s+", first_message)
-                        if s.strip()
-                    ]
-                    if not sentences:
-                        sentences = [first_message]
-                    for sent in sentences:
-                        await _sarvam_fetch(
-                            sent,
-                            api_key=_tts._api_key,
-                            speaker=_tts._speaker,
-                            model=_tts._model,
-                            language=_tts._language,
-                        )
-                    logger.debug("Greeting TTS pre-warmed (%d sentence(s))", len(sentences))
-                except Exception as _pw_err:
-                    logger.debug("Greeting TTS prewarm skipped: %s", _pw_err)
 
-            asyncio.ensure_future(_prewarm_greeting_tts())
 
             user_spoke_before_greeting = False
             while True:

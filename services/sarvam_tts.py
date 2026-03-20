@@ -78,7 +78,7 @@ async def _fetch_audio(
     speaker: str,
     model: str,
     language: str,
-    pace: float = 1.15,
+    pace: float = 0.95,
     loudness: float = 1.3,
 ) -> bytes:
     """
