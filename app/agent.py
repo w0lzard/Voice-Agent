@@ -256,6 +256,9 @@ def _prerecorded_clip_for_text(text: str, language: str) -> bytes | None:
             f"Main {os.getenv('AGENT_PERSONA_NAME', 'Shubhi')} bol rahi hoon, {os.getenv('AGENT_COMPANY_NAME', 'Anantasutra')} se."
         ): "identity_hi",
         _normalize_text("Main property options shortlist karne mein help karti hoon."): "what_i_do_hi",
+        _normalize_text(
+            f"Main {os.getenv('AGENT_COMPANY_NAME', 'Anantasutra')} ke liye kaam karti hoon."
+        ): "company_hi",
     }
     clip_key = clip_map.get(normalized)
     if not clip_key:
@@ -274,7 +277,32 @@ _LOCATION_HINTS = (
     "bandra", "andheri", "juhu", "thane", "navi mumbai", "mumbai", "pune", "delhi",
     "gurgaon", "gurugram", "noida", "greater noida", "bangalore", "bengaluru",
     "hyderabad", "chennai", "kolkata", "jaipur", "goa", "surat", "lucknow",
+    "\u092c\u093e\u0902\u0926\u094d\u0930\u093e", "\u0905\u0902\u0927\u0947\u0930\u0940", "\u0925\u093e\u0923\u0947",
+    "\u092e\u0941\u0902\u092c\u0908", "\u0926\u093f\u0932\u094d\u0932\u0940", "\u092a\u0941\u0923\u0947",
+    "\u0917\u0941\u0930\u0941\u0917\u094d\u0930\u093e\u092e", "\u0928\u094b\u090f\u0921\u093e",
+    "\u092c\u0947\u0902\u0917\u0932\u0941\u0930\u0941", "\u0939\u0948\u0926\u0930\u093e\u092c\u093e\u0926",
+    "\u091a\u0947\u0928\u094d\u0928\u0908", "\u0915\u094b\u0932\u0915\u093e\u0924\u093e", "\u091c\u092f\u092a\u0941\u0930",
 )
+
+_PROPERTY_CONTEXT_HINTS = (
+    "property", "flat", "apartment", "villa", "plot", "commercial", "office", "shop",
+    "ghar", "home", "house", "buy", "purchase", "investment", "rent", "sale",
+    "location", "area", "budget", "bhk", "builder", "project",
+    "\u092a\u094d\u0930\u0949\u092a\u0930\u094d\u091f\u0940", "\u092b\u094d\u0932\u0948\u091f", "\u0918\u0930",
+    "\u092c\u091c\u091f", "\u090f\u0930\u093f\u092f\u093e", "\u0932\u094b\u0915\u0947\u0936\u0928",
+    "\u0915\u0940\u092e\u0924", "\u0916\u0930\u0940\u0926", "\u0907\u0928\u094d\u0935\u0947\u0938\u094d\u091f",
+)
+
+_LOCATION_STOPWORDS = {
+    "mujhe", "mje", "mujko", "mujhko", "flat", "property", "ghar", "lena", "lena", "hai",
+    "chahiye", "dekh", "rahe", "rahi", "raha", "hain", "hai?", "kya", "tum", "aap", "bata",
+    "sakti", "sakta", "ho", "main", "mein", "me", "for", "in", "ka", "ki", "ke",
+    "\u092e\u0941\u091d\u0947", "\u092a\u094d\u0930\u0949\u092a\u0930\u094d\u091f\u0940", "\u0918\u0930",
+    "\u0932\u0947\u0928\u093e", "\u0939\u0948", "\u091a\u093e\u0939\u093f\u090f", "\u0926\u0947\u0916",
+    "\u0930\u0939\u0947", "\u0930\u0939\u0940", "\u0930\u0939\u093e", "\u0939\u094b", "\u0915\u094d\u092f\u093e",
+    "\u0924\u0941\u092e", "\u0906\u092a", "\u092c\u0924\u093e", "\u0938\u0915\u0924\u0940", "\u0938\u0915\u0924\u093e",
+    "\u0915\u093e", "\u0915\u0940", "\u0915\u0947",
+}
 
 _AFFIRM_PHRASES = (
     "haan", "han", "ha", "ji", "bilkul", "theek", "thik", "batayiye", "bataiye",
@@ -323,6 +351,43 @@ def _extract_budget(text_lower: str) -> str | None:
     return None
 
 
+def _extract_location(text_lower: str) -> str | None:
+    for location in _LOCATION_HINTS:
+        if location in text_lower:
+            return location
+
+    matches = re.finditer(
+        r"([a-z\u0900-\u097f]+(?:\s+[a-z\u0900-\u097f]+){0,2})\s+(?:mein|me|mai|\u092e\u0947\u0902)\b",
+        text_lower,
+    )
+    last_candidate: str | None = None
+    for match in matches:
+        tokens = match.group(1).split()
+        kept: list[str] = []
+        for token in reversed(tokens):
+            if token in _LOCATION_STOPWORDS and kept:
+                break
+            if token in _LOCATION_STOPWORDS:
+                continue
+            kept.append(token)
+            if len(kept) >= 2:
+                break
+        if kept:
+            last_candidate = " ".join(reversed(kept))
+
+    return last_candidate
+
+
+def _has_property_context(text_lower: str, state: dict) -> bool:
+    if any(hint in text_lower for hint in _PROPERTY_CONTEXT_HINTS):
+        return True
+    if _extract_budget(text_lower):
+        return True
+    if _extract_location(text_lower):
+        return True
+    return bool(state.get("timeline"))
+
+
 def _update_lead_state(session, transcript: str) -> dict:
     state = _get_lead_state(session)
     text_lower = _normalize_text(transcript)
@@ -332,10 +397,9 @@ def _update_lead_state(session, transcript: str) -> dict:
             state["property_type"] = property_type
             break
 
-    for location in _LOCATION_HINTS:
-        if location in text_lower:
-            state["location"] = location
-            break
+    location = _extract_location(text_lower)
+    if location:
+        state["location"] = location
 
     budget = _extract_budget(text_lower)
     if budget:
@@ -366,6 +430,9 @@ def _build_fast_reply(session, transcript: str) -> str | None:
     state = _update_lead_state(session, transcript)
     text_lower = _normalize_text(transcript)
     last_fast = state.get("last_fast_reply", "")
+    last_assistant = (getattr(session, "_last_assistant_text", "") or "").strip()
+    has_property_context = _has_property_context(text_lower, state)
+    is_affirmation = any(phrase in text_lower for phrase in _AFFIRM_PHRASES)
 
     def choose(options: list[str]) -> str:
         reply = _pick_variant(options, last_fast)
@@ -387,10 +454,19 @@ def _build_fast_reply(session, transcript: str) -> str | None:
     ):
         agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
         company = os.getenv("AGENT_COMPANY_NAME", "Anantasutra")
-        return choose([
-            f"Main {agent_name} bol rahi hoon, {company} se.",
-            f"Ji, {agent_name} hoon, {company} se.",
-        ])
+        return use_cached(f"Main {agent_name} bol rahi hoon, {company} se.")
+
+    if any(
+        phrase in text_lower
+        for phrase in (
+            "kis ke liye kaam", "kiske liye kaam", "kis company", "kaunsi company",
+            "which company", "which firm", "kahaan se", "anantasutra se ho",
+            "\u0915\u093f\u0938\u0915\u0947 \u0932\u093f\u090f \u0915\u093e\u092e",
+            "\u0915\u093f\u0938 \u0915\u0902\u092a\u0928\u0940", "\u0915\u0939\u093e\u0901 \u0938\u0947",
+        )
+    ):
+        company = os.getenv("AGENT_COMPANY_NAME", "Anantasutra")
+        return use_cached(f"Main {company} ke liye kaam karti hoon.")
 
     if any(
         phrase in text_lower
@@ -403,9 +479,25 @@ def _build_fast_reply(session, transcript: str) -> str | None:
             "\u0924\u0941\u092e\u094d\u0939\u093e\u0930\u093e \u0915\u094d\u092f\u093e \u0939\u0948",
         )
     ):
+        return use_cached("Main property options shortlist karne mein help karti hoon.")
+
+    if any(
+        phrase in text_lower
+        for phrase in (
+            "phir se bolo", "fir se bolo", "dobara bolo", "repeat", "repeat karo",
+            "kya bola", "samjha nahi", "samajh nahi aaya", "again bolo",
+            "\u092b\u093f\u0930 \u0938\u0947 \u092c\u094b\u0932\u094b",
+            "\u0926\u094b\u092c\u093e\u0930\u093e \u092c\u094b\u0932\u094b",
+            "\u0915\u094d\u092f\u093e \u092c\u094b\u0932\u093e",
+            "\u0938\u092e\u091d\u093e \u0928\u0939\u0940\u0902",
+            "\u0938\u092e\u091d \u0928\u0939\u0940\u0902 \u0906\u092f\u093e",
+        )
+    ):
+        if last_assistant:
+            return use_cached(last_assistant)
         return choose([
-            "Main property options shortlist karne mein help karti hoon.",
-            "Main aapke liye suitable property options nikalwati hoon.",
+            "Bilkul, main phir se bolti hoon.",
+            "Ji, ek baar aur batati hoon.",
         ])
 
     if any(
@@ -447,22 +539,22 @@ def _build_fast_reply(session, transcript: str) -> str | None:
             "Samajh gaya, kabhi bhi property help chahiye ho to batayiyega.",
         ])
 
-    if state["location"] and not state["budget"]:
+    if has_property_context and state["location"] and not state["budget"]:
         return use_cached("Budget kya socha hai?")
 
-    if state["budget"] and not state["property_type"]:
+    if has_property_context and state["budget"] and not state["property_type"]:
         return use_cached("Ji, kis type ki property dekh rahe hain?")
 
-    if state["property_type"] and not state["location"]:
+    if has_property_context and state["property_type"] and not state["location"]:
         return use_cached("Achha, kis area mein dekh rahe hain?")
 
-    if state["property_type"] and state["location"] and not state["budget"]:
+    if has_property_context and state["property_type"] and state["location"] and not state["budget"]:
         return use_cached("Budget kya socha hai?")
 
-    if state["property_type"] and state["location"] and state["budget"] and not state["timeline"]:
+    if has_property_context and state["property_type"] and state["location"] and state["budget"] and not state["timeline"]:
         return use_cached("Kab tak lena plan kar rahe hain?")
 
-    if any(phrase in text_lower for phrase in _AFFIRM_PHRASES):
+    if is_affirmation:
         if not state["property_type"]:
             return use_cached("Ji, kis type ki property dekh rahe hain?")
         if not state["location"]:
@@ -1183,6 +1275,7 @@ def prewarm(proc: agents.JobProcess) -> None:
         _layer1.add_clip("greeting_en", _default_first_message(agent_name, company, "en"))
         _layer1.add_clip("identity_hi", f"Main {agent_name} bol rahi hoon, {company} se.")
         _layer1.add_clip("what_i_do_hi", "Main property options shortlist karne mein help karti hoon.")
+        _layer1.add_clip("company_hi", f"Main {company} ke liye kaam karti hoon.")
         _layer1.add_clip("fallback_moment_hi", "Haan, sun rahi hoon, ek moment...")
         _layer1.add_clip("fallback_wait_hi", "Theek hai, ek sec dekh rahi hoon...")
         _layer1.add_clip("ask_property_type_hi", "Ji, kis type ki property dekh rahe hain?")
@@ -1217,6 +1310,7 @@ async def _speak_scripted_line(
     try:
         _remember_manual_agent_text(session, text, resolves_turn=resolves_turn)
         if resolves_turn:
+            _push_recent_turn(session, "assistant", text)
             session.history.add_message(content=text, role="assistant")
         cached_pcm = _prerecorded_clip_for_text(text, _get_default_language())
         await session.say(
@@ -1228,6 +1322,18 @@ async def _speak_scripted_line(
         await asyncio.sleep(0.1)  # allow scheduler reset
     finally:
         _agent_is_speaking[0] = False
+
+
+async def _cancel_pending_model_reply(session: AgentSession) -> None:
+    """Best-effort stop of any auto-generated LLM reply before a fast-path line."""
+    try:
+        await asyncio.wait_for(session.interrupt(force=True), timeout=0.4)
+    except Exception:
+        pass
+    try:
+        session.clear_user_turn()
+    except Exception:
+        pass
 
 
 # Shared session for fire-and-forget POSTs to ws_server — avoids leaking TCP
@@ -1670,14 +1776,17 @@ async def entrypoint(ctx: agents.JobContext):
         if fast_reply:
             logger.info("FAST PATH: '%s' -> '%s'", _safe_log_text(transcript), fast_reply)
             _pending_turn_id[0] = 0
-            asyncio.create_task(
-                _speak_scripted_line(
+
+            async def _deliver_fast_reply() -> None:
+                await _cancel_pending_model_reply(session)
+                await _speak_scripted_line(
                     session,
                     text=fast_reply,
                     allow_interruptions=True,
                     resolves_turn=True,
                 )
-            )
+
+            asyncio.create_task(_deliver_fast_reply())
             return
 
         # -- Layer 2: short filler only while Layer 3 is still thinking --

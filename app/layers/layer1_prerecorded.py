@@ -35,6 +35,7 @@ DEFAULT_CLIPS: dict[str, str] = {
     "feminine_confirm_hi": "Bilkul, main madad kar sakti hoon.",
     "identity_hi": "Main Shubhi bol rahi hoon, Anantasutra se.",
     "what_i_do_hi": "Main property options shortlist karne mein help karti hoon.",
+    "company_hi": "Main Anantasutra ke liye kaam karti hoon.",
     "busy_hi": (
         "Namaste! Abhi hamare saare agents busy hain. "
         "Kripya thodi der baad call karein. Dhanyavaad!"
@@ -127,8 +128,8 @@ class PrerecordedLayer:
                     "speaker":              self._speaker,
                     "model":                self._model,
                     "pitch":                0,
-                    "pace":                 float(os.getenv("SARVAM_TTS_PACE", "0.98")),
-                    "loudness":             float(os.getenv("SARVAM_TTS_LOUDNESS", "1.15")),
+                    "pace":                 float(os.getenv("SARVAM_TTS_PACE", "0.94")),
+                    "loudness":             float(os.getenv("SARVAM_TTS_LOUDNESS", "1.0")),
                     "speech_sample_rate":   self._sample_rate,
                     "enable_preprocessing": True,
                 },

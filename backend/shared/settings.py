@@ -2,6 +2,7 @@
 Configuration and environment variables loader.
 """
 import os
+from collections.abc import Iterable
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -104,16 +105,27 @@ class Config:
     INTERNAL_API_SECRET = os.getenv("INTERNAL_API_SECRET", "")
     
     @classmethod
-    def validate(cls):
-        """Validate required configuration."""
-        required = [
-            ("LIVEKIT_URL", cls.LIVEKIT_URL),
-            ("LIVEKIT_API_KEY", cls.LIVEKIT_API_KEY),
-            ("LIVEKIT_API_SECRET", cls.LIVEKIT_API_SECRET),
-            ("MONGODB_URI", cls.MONGODB_URI),
-        ]
-        required.append(("GOOGLE_API_KEY", cls.GOOGLE_API_KEY))
-        missing = [name for name, value in required if not value]
+    def validate(cls, required_names: Iterable[str] | None = None):
+        """Validate required configuration.
+
+        When ``required_names`` is omitted, validate the baseline settings that
+        all backend services rely on. Service-specific callers can pass a
+        smaller or larger set of environment variable names as needed.
+        """
+        values = {
+            "LIVEKIT_URL": cls.LIVEKIT_URL,
+            "LIVEKIT_API_KEY": cls.LIVEKIT_API_KEY,
+            "LIVEKIT_API_SECRET": cls.LIVEKIT_API_SECRET,
+            "MONGODB_URI": cls.MONGODB_URI,
+            "GOOGLE_API_KEY": cls.GOOGLE_API_KEY,
+        }
+        names = tuple(required_names or (
+            "LIVEKIT_URL",
+            "LIVEKIT_API_KEY",
+            "LIVEKIT_API_SECRET",
+            "MONGODB_URI",
+        ))
+        missing = [name for name in names if not values.get(name)]
         if missing:
             raise ValueError(f"Missing required environment variables: {', '.join(missing)}")
         return True

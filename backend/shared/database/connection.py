@@ -2,8 +2,9 @@
 MongoDB database connection manager.
 """
 import logging
+import os
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
-from pymongo.errors import ConnectionFailure
+from pymongo.errors import ConnectionFailure, PyMongoError
 
 logger = logging.getLogger("database")
 
@@ -27,7 +28,15 @@ async def connect_to_database(uri: str, db_name: str = "vobiz_calls") -> AsyncIO
     
     try:
         logger.info(f"Connecting to MongoDB...")
-        _client = AsyncIOMotorClient(uri)
+        server_selection_timeout_ms = int(os.getenv("MONGODB_SERVER_SELECTION_TIMEOUT_MS", "5000"))
+        connect_timeout_ms = int(os.getenv("MONGODB_CONNECT_TIMEOUT_MS", "5000"))
+        socket_timeout_ms = int(os.getenv("MONGODB_SOCKET_TIMEOUT_MS", "5000"))
+        _client = AsyncIOMotorClient(
+            uri,
+            serverSelectionTimeoutMS=server_selection_timeout_ms,
+            connectTimeoutMS=connect_timeout_ms,
+            socketTimeoutMS=socket_timeout_ms,
+        )
         
         # Verify connection
         await _client.admin.command('ping')
@@ -40,7 +49,7 @@ async def connect_to_database(uri: str, db_name: str = "vobiz_calls") -> AsyncIO
         
         return _db
         
-    except ConnectionFailure as e:
+    except (ConnectionFailure, PyMongoError) as e:
         logger.error(f"Failed to connect to MongoDB: {e}")
         raise
 

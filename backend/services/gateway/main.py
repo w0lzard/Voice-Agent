@@ -31,32 +31,52 @@ def _cors_allow_origins() -> list[str]:
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
-    
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Application lifespan manager."""
         from shared.settings import config
         from shared.database import connect_to_database, close_database_connection
-        
+
         logger.info("Starting API Gateway...")
-        
-        # Validate configuration
+        app.state.startup_errors = []
+        app.state.config_valid = True
+        app.state.mongodb_ready = False
+
+        # Validate the minimum config needed for the gateway process to boot.
         try:
-            config.validate()
+            config.validate(
+                required_names=(
+                    "LIVEKIT_URL",
+                    "LIVEKIT_API_KEY",
+                    "LIVEKIT_API_SECRET",
+                )
+            )
         except ValueError as e:
-            logger.error(f"Configuration error: {e}")
-            raise
-        
-        # Connect to MongoDB
-        await connect_to_database(config.MONGODB_URI, config.MONGODB_DB_NAME)
-        logger.info("MongoDB connected")
-        
+            app.state.config_valid = False
+            app.state.startup_errors.append(str(e))
+            logger.warning("Gateway starting in degraded mode: %s", e)
+
+        # MongoDB is required for most routes, but not for liveness. Start the
+        # process even when Mongo is down so Railway can still hit /health.
+        if config.MONGODB_URI:
+            try:
+                await connect_to_database(config.MONGODB_URI, config.MONGODB_DB_NAME)
+                app.state.mongodb_ready = True
+                logger.info("MongoDB connected")
+            except Exception as e:
+                app.state.startup_errors.append(f"MongoDB unavailable: {e}")
+                logger.warning("Gateway starting without MongoDB connectivity: %s", e)
+        else:
+            app.state.startup_errors.append("Missing required environment variable: MONGODB_URI")
+            logger.warning("Gateway starting without MongoDB connectivity: MONGODB_URI is not set")
+
         yield
-        
+
         # Shutdown
         logger.info("Shutting down API Gateway...")
         await close_database_connection()
-    
+
     # Create app
     app = FastAPI(
         title="Vobiz Voice AI Platform - Gateway",
@@ -64,6 +84,9 @@ def create_app() -> FastAPI:
         version="1.0.0",
         lifespan=lifespan,
     )
+    app.state.startup_errors = []
+    app.state.config_valid = True
+    app.state.mongodb_ready = False
     
     # Add CORS
     app.add_middleware(
@@ -107,7 +130,7 @@ app = create_app()
 if __name__ == "__main__":
     import uvicorn
     from shared.settings import config
-    
+
     uvicorn.run(
         "gateway.main:app",
         host=config.API_HOST,
