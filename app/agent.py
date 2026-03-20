@@ -1718,7 +1718,7 @@ async def entrypoint(ctx: agents.JobContext):
         handle_user_state_change(ev)
 
     @session.on("user_input_transcribed")
-    async def _on_user_input_transcribed(ev) -> None:
+    def _on_user_input_transcribed(ev) -> None:
         nonlocal last_user_speech_at, reprompt_task
         transcript = (getattr(ev, "transcript", "") or "").strip()
         if not transcript:
@@ -1739,6 +1739,12 @@ async def entrypoint(ctx: agents.JobContext):
         if not conversation_manager.should_process_transcript(transcript, is_final):
             return
 
+        # Create async task for enhanced processing
+        asyncio.create_task(_enhanced_transcript_processing(session, ev, transcript, is_final, last_user_speech_at, reprompt_task, ctx))
+
+    async def _enhanced_transcript_processing(session, ev, transcript, is_final, last_user_speech_at, reprompt_task, ctx):
+        nonlocal _layer2_task, _safety_task, _active_turn_id, _pending_turn_id, fnc_ctx, _carrier_detected_at, _user_state, _agent_state, _last_agent_response_at
+        
         # Wait for natural pause before processing
         if not await conversation_manager.wait_for_natural_pause(session):
             return
