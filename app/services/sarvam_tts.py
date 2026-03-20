@@ -91,7 +91,7 @@ async def _fetch_audio(
         try:
             async with aiohttp.ClientSession() as session:
                 resp = await session.post(
-                    "https://api.sarvam.ai/speech_synthesize",
+                    "https://api.sarvam.ai/text-to-speech",
                     headers={
                         "api-subscription-key": api_key,
                         "Content-Type": "application/json",
