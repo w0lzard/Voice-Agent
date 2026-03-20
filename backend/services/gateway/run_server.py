@@ -23,7 +23,10 @@ def _resolve_bind_host() -> str:
 
 
 def _resolve_bind_port() -> int:
-    return int(os.getenv("PORT") or os.getenv("API_PORT") or config.API_PORT or 8080)
+    # Ensure PORT is set for Railway healthcheck
+    port = int(os.getenv("PORT") or os.getenv("API_PORT") or config.API_PORT or 8080)
+    os.environ["PORT"] = str(port)  # Set for Railway healthcheck
+    return port
 
 
 if __name__ == "__main__":
