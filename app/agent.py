@@ -4,8 +4,11 @@ import logging
 import json
 import time
 import tempfile
+import random
+import re
 import threading
 import sys
+import unicodedata
 from pathlib import Path
 
 # Automatically map Railway's dynamic PORT to LiveKit's HTTP server
@@ -15,22 +18,20 @@ os.environ["LIVEKIT_HTTP_SERVER_PORT"] = os.getenv("PORT", "0")
 from dotenv import load_dotenv
 import aiohttp
 
-# ── DEBUG: Verifying path and package ─────────────────────────────────────────
-import sys
-import importlib
-print(f"DEBUG: sys.path = {sys.path}")
-print(f"DEBUG: __name__ = {__name__}")
-try:
-    importlib.import_module("app.services")
-    print("DEBUG: ✅ 'app.services' import successful")
-except Exception as e:
-    print(f"DEBUG: ❌ 'app.services' import failed: {e}")
-    # Check if a legacy 'services' exists in path
-    try:
-        importlib.import_module("services")
-        print("DEBUG: ⚠️  Legacy 'services' module found in path!")
-    except ImportError:
-        pass
+
+def load_environment() -> None:
+    """Load env files with project-local values taking precedence."""
+    root_dir = Path(__file__).resolve().parent.parent
+    for env_path in (
+        root_dir / "backend" / ".env.local",
+        root_dir / ".env.local",
+        root_dir / ".env",
+    ):
+        if env_path.exists():
+            load_dotenv(env_path, override=True)
+
+
+load_environment()
 
 # ── 3-Layer speech architecture ───────────────────────────────────────────────
 try:
@@ -133,6 +134,320 @@ def _release_call_slot() -> None:
     """Decrement the active-call counter."""
     _slots_read_write(-1)
 
+
+# Track short-turn context to keep the LLM grounded and avoid repetition.
+_RECENT_TURNS_LIMIT = 3
+_last_fallback_text = [""]
+_MANUAL_TEXT_WINDOW = 12
+
+
+def _push_recent_turn(session, role: str, text: str) -> None:
+    """Maintain a small rolling window of recent turns for context-aware fallbacks."""
+    if not text:
+        return
+    turns = getattr(session, "_recent_turns", [])
+    turns.append({"role": role, "text": text.strip()})
+    session._recent_turns = turns[-_RECENT_TURNS_LIMIT:]
+    if role == "assistant":
+        session._last_assistant_text = text.strip()
+
+
+def _choose_fallback(session, user_hint: str | None = None) -> str:
+    """
+    Pick a human-sounding, non-repeating fallback line based on recent context.
+    Avoids repeating the last fallback and softens hard refusals.
+    """
+    base_phrases = [
+        "Ek second, samajhne dijiye...",
+        "Main check kar rahi hoon...",
+        "Haan, sun rahi hoon, ek moment...",
+        "Aap thoda aur bata sakte hain?",
+        "Theek hai, ek sec dekh rahi hoon...",
+    ]
+
+    recent_turns = getattr(session, "_recent_turns", [])
+    last_user = user_hint or next((t["text"] for t in reversed(recent_turns) if t["role"] == "user"), "")
+    if last_user:
+        lu = last_user.lower()
+        if any(kw in lu for kw in ("nahi", "nahin", "no thanks", "not interested")):
+            base_phrases.insert(
+                0,
+                "Samajh gaya, future mein ghar ya investment sochen to batayenge?"
+            )
+
+    options = [p for p in base_phrases if p != _last_fallback_text[0]]
+    if not options:
+        options = base_phrases
+    choice = random.choice(options)
+    _last_fallback_text[0] = choice
+    return choice
+
+
+def _remember_manual_agent_text(session, text: str, *, resolves_turn: bool) -> None:
+    """Remember manual speech so we don't confuse Layer 1/2 audio with LLM output."""
+    if not text:
+        return
+    manual = getattr(session, "_manual_agent_texts", [])
+    manual.append(
+        {
+            "text": text.strip(),
+            "resolves_turn": resolves_turn,
+            "at": time.time(),
+        }
+    )
+    session._manual_agent_texts = manual[-_MANUAL_TEXT_WINDOW:]
+
+
+def _consume_manual_agent_text(session, text: str):
+    """Pop a recently spoken manual line if this assistant item matches it."""
+    manual = getattr(session, "_manual_agent_texts", [])
+    target = text.strip()
+    for idx in range(len(manual) - 1, -1, -1):
+        if manual[idx]["text"] == target:
+            return manual.pop(idx)
+    return None
+
+
+def _pcm_audio_stream(pcm: bytes, *, sample_rate: int = 24000, num_channels: int = 1):
+    """Convert cached PCM bytes into an async stream of LiveKit audio frames."""
+    byte_stream = AudioByteStream(
+        sample_rate=sample_rate,
+        num_channels=num_channels,
+        samples_per_channel=sample_rate // 50,  # 20 ms frames
+    )
+
+    async def _gen():
+        for frame in byte_stream.push(pcm):
+            yield frame
+            await asyncio.sleep(0)
+        for frame in byte_stream.flush():
+            yield frame
+            await asyncio.sleep(0)
+
+    return _gen()
+
+
+def _prerecorded_clip_for_text(text: str, language: str) -> bytes | None:
+    if not _HAS_LAYERS:
+        return None
+
+    normalized = _normalize_text(text)
+    clip_map = {
+        _normalize_text(_default_first_message(
+            os.getenv("AGENT_PERSONA_NAME", "Shubhi"),
+            os.getenv("AGENT_COMPANY_NAME", "Anantasutra"),
+            language,
+        )): f"greeting_{'hi' if language == 'hi' else 'en'}",
+        _normalize_text("Main check kar rahi hoon..."): "filler_checking",
+        _normalize_text("Ek sec..."): "filler_moment",
+        _normalize_text("Bilkul..."): "filler_sure",
+        _normalize_text("Achha..."): "filler_okay",
+        _normalize_text("Aap thoda aur bata sakte hain?"): "fallback_listen",
+        _normalize_text("Ek second, samajhne dijiye..."): "fallback_thinking",
+        _normalize_text("Haan, sun rahi hoon, ek moment..."): "fallback_moment_hi",
+        _normalize_text("Theek hai, ek sec dekh rahi hoon..."): "fallback_wait_hi",
+        _normalize_text("Ji, kis type ki property dekh rahe hain?"): "ask_property_type_hi",
+        _normalize_text("Achha, kis area mein dekh rahe hain?"): "ask_location_hi",
+        _normalize_text("Budget kya socha hai?"): "ask_budget_hi",
+        _normalize_text("Kab tak lena plan kar rahe hain?"): "ask_timeline_hi",
+        _normalize_text(
+            f"Main {os.getenv('AGENT_PERSONA_NAME', 'Shubhi')} bol rahi hoon, {os.getenv('AGENT_COMPANY_NAME', 'Anantasutra')} se."
+        ): "identity_hi",
+        _normalize_text("Main property options shortlist karne mein help karti hoon."): "what_i_do_hi",
+    }
+    clip_key = clip_map.get(normalized)
+    if not clip_key:
+        return None
+    return _layer1.get(clip_key)
+
+
+_PROPERTY_PATTERNS = (
+    ("flat", ("flat", "apartment", "2bhk", "3bhk", "builder floor")),
+    ("villa", ("villa", "bungalow", "kothi", "independent house")),
+    ("plot", ("plot", "land", "zameen")),
+    ("commercial", ("commercial", "office", "shop", "retail", "showroom")),
+)
+
+_LOCATION_HINTS = (
+    "bandra", "andheri", "juhu", "thane", "navi mumbai", "mumbai", "pune", "delhi",
+    "gurgaon", "gurugram", "noida", "greater noida", "bangalore", "bengaluru",
+    "hyderabad", "chennai", "kolkata", "jaipur", "goa", "surat", "lucknow",
+)
+
+_AFFIRM_PHRASES = (
+    "haan", "han", "ha", "ji", "bilkul", "theek", "thik", "batayiye", "bataiye",
+    "bolo", "boliye", "sure", "yes", "okay", "ok",
+    "\u0939\u093e\u0901", "\u0939\u093e\u0902", "\u091c\u0940", "\u092c\u093f\u0932\u0915\u0941\u0932",
+    "\u092c\u093f\u0932\u094d\u0915\u0941\u0932", "\u0920\u0940\u0915", "\u092c\u0924\u093e\u0907\u090f",
+    "\u092c\u094b\u0932\u093f\u090f", "\u0915\u0939\u093f\u090f",
+)
+
+_NEGATIVE_PHRASES = (
+    "nahi", "nahin", "nhi", "not interested", "mat", "baad mein", "busy",
+    "\u0928\u0939\u0940\u0902", "\u0928\u093e", "\u092e\u0924",
+    "\u092c\u093e\u0926 \u092e\u0947\u0902", "\u0935\u094d\u092f\u0938\u094d\u0924",
+)
+
+
+def _get_lead_state(session) -> dict:
+    state = getattr(session, "_lead_state", None)
+    if state is None:
+        state = {
+            "property_type": None,
+            "location": None,
+            "budget": None,
+            "timeline": None,
+            "caller_name": None,
+            "last_fast_reply": "",
+        }
+        session._lead_state = state
+    return state
+
+
+def _pick_variant(options: list[str], last_text: str) -> str:
+    available = [option for option in options if option != last_text]
+    if not available:
+        available = options
+    return random.choice(available)
+
+
+def _extract_budget(text_lower: str) -> str | None:
+    match = re.search(
+        r"(\d+[\d.,]*)\s*(lakh|lac|crore|cr|k|thousand|hazar|hazaar)",
+        text_lower,
+    )
+    if match:
+        return match.group(0)
+    return None
+
+
+def _update_lead_state(session, transcript: str) -> dict:
+    state = _get_lead_state(session)
+    text_lower = _normalize_text(transcript)
+
+    for property_type, variants in _PROPERTY_PATTERNS:
+        if any(variant in text_lower for variant in variants):
+            state["property_type"] = property_type
+            break
+
+    for location in _LOCATION_HINTS:
+        if location in text_lower:
+            state["location"] = location
+            break
+
+    budget = _extract_budget(text_lower)
+    if budget:
+        state["budget"] = budget
+
+    timeline_match = re.search(
+        r"(is hafte|is month|iss month|next month|agle mahine|immediately|jaldi|1 month|2 month|3 month)",
+        text_lower,
+    )
+    if timeline_match:
+        state["timeline"] = timeline_match.group(1)
+
+    name_match = re.search(
+        r"(?:mera|my|\u092e\u0947\u0930\u093e)\s+(?:naam|\u0928\u093e\u092e)\s+([a-zA-Z\u0900-\u097F]+)",
+        text_lower,
+    )
+    if name_match:
+        state["caller_name"] = name_match.group(1).strip().title()
+
+    return state
+
+
+def _build_fast_reply(session, transcript: str) -> str | None:
+    """
+    Handle simple, high-confidence turns locally so the caller hears a useful
+    reply in 1-2 seconds instead of waiting on the LLM every time.
+    """
+    state = _update_lead_state(session, transcript)
+    text_lower = _normalize_text(transcript)
+    last_fast = state.get("last_fast_reply", "")
+
+    def choose(options: list[str]) -> str:
+        reply = _pick_variant(options, last_fast)
+        state["last_fast_reply"] = reply
+        return reply
+
+    def use_cached(reply: str) -> str:
+        state["last_fast_reply"] = reply
+        return reply
+
+    if any(
+        phrase in text_lower
+        for phrase in (
+            "kaun bol", "kaun ho", "naam kya", "who are you", "tumhara naam",
+            "aapka naam", "tera naam", "\u0924\u0941\u092e\u094d\u0939\u093e\u0930\u093e \u0928\u093e\u092e",
+            "\u0906\u092a\u0915\u093e \u0928\u093e\u092e", "\u0924\u0947\u0930\u093e \u0928\u093e\u092e",
+            "\u0928\u093e\u092e \u0915\u094d\u092f\u093e",
+        )
+    ):
+        agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
+        company = os.getenv("AGENT_COMPANY_NAME", "Anantasutra")
+        return choose([
+            f"Main {agent_name} bol rahi hoon, {company} se.",
+            f"Ji, {agent_name} hoon, {company} se.",
+        ])
+
+    if any(
+        phrase in text_lower
+        for phrase in (
+            "kya karti ho", "kya karte ho", "what do you do", "tumhara kya hai",
+            "aap kya karte", "\u0924\u0941\u092e \u0915\u094d\u092f\u093e \u0915\u0930\u0924\u0947",
+            "\u0924\u0941\u092e \u0915\u094d\u092f\u093e \u0915\u0930\u0924\u0940",
+            "\u0906\u092a \u0915\u094d\u092f\u093e \u0915\u0930\u0924\u0947",
+            "\u0906\u092a \u0915\u094d\u092f\u093e \u0915\u0930\u0924\u0940",
+            "\u0924\u0941\u092e\u094d\u0939\u093e\u0930\u093e \u0915\u094d\u092f\u093e \u0939\u0948",
+        )
+    ):
+        return choose([
+            "Main property options shortlist karne mein help karti hoon.",
+            "Main aapke liye suitable property options nikalwati hoon.",
+        ])
+
+    if (
+        "mera naam" in text_lower
+        or "my name" in text_lower
+        or "\u092e\u0947\u0930\u093e \u0928\u093e\u092e" in text_lower
+    ) and state.get("caller_name"):
+        return choose([
+            f"{state['caller_name']}, aapse baat karke accha laga. Kis area mein dekh rahe hain?",
+            f"Thanks {state['caller_name']}. Aap kis location mein dekh rahe hain?",
+        ])
+
+    if any(phrase in text_lower for phrase in _NEGATIVE_PHRASES):
+        return choose([
+            "Theek hai, future mein zarurat ho to batayiyega.",
+            "Samajh gaya, kabhi bhi property help chahiye ho to batayiyega.",
+        ])
+
+    if state["location"] and not state["budget"]:
+        return use_cached("Budget kya socha hai?")
+
+    if state["budget"] and not state["property_type"]:
+        return use_cached("Ji, kis type ki property dekh rahe hain?")
+
+    if state["property_type"] and not state["location"]:
+        return use_cached("Achha, kis area mein dekh rahe hain?")
+
+    if state["property_type"] and state["location"] and not state["budget"]:
+        return use_cached("Budget kya socha hai?")
+
+    if state["property_type"] and state["location"] and state["budget"] and not state["timeline"]:
+        return use_cached("Kab tak lena plan kar rahe hain?")
+
+    if any(phrase in text_lower for phrase in _AFFIRM_PHRASES):
+        if not state["property_type"]:
+            return use_cached("Ji, kis type ki property dekh rahe hain?")
+        if not state["location"]:
+            return use_cached("Achha, kis area mein dekh rahe hain?")
+        if not state["budget"]:
+            return use_cached("Budget kya socha hai?")
+
+    return None
+
+
 # Agent conversation script — edit app/scripts/agent_script.py to change call flow.
 # Loaded at startup so Railway/Docker deployments don't need scripts/ on sys.path.
 _SCRIPTS_DIR = Path(__file__).resolve().parent / "scripts" / "agent_script.py"
@@ -144,37 +459,29 @@ else:
     # Fallback: inline copy so the agent still starts if the file is missing.
     # Keep this in sync with scripts/agent_script.py.
     AGENT_SCRIPT = """
-You are {agent_name}, a young friendly female real estate sales agent from {company}.
-You speak natural Hinglish like a real North Indian girl on phone.
+You are {agent_name}, a friendly human sales agent from {company} on a phone call.
 
-HARD RULES:
-- MAXIMUM 8 WORDS per reply. NEVER exceed this.
-- Always reply in Hinglish (Hindi + English mix).
-- Sound natural, warm, direct. NOT robotic.
-- ONE question per reply. Never combine questions.
-- NEVER repeat a question already answered.
-- NEVER say "batati hoon", "ruk jaiye", "ek second", "kripya".
-- NEVER reveal you are AI/bot. You are {agent_name}.
+STYLE & TONE
+- Speak casual Hinglish; usually 4-10 words, never long paragraphs.
+- Vary wording every turn; avoid repeating phrases.
+- Sprinkle natural fillers when needed: "haan samajh gaya", "accha", "theek hai", "hmm".
+- First respond to what the caller said, then ask at most one question.
+- Never mention scripts, AI, bots, or reading lines.
 
-CONVERSATION FLOW (follow strictly, one step at a time):
-1. Property type → "Flat, villa ya plot?"
-2. Location → "Kaunsi location pasand hai?"
-3. Budget → "Budget kitna socha hai?"
-4. Timeline → "Kab tak chahiye?"
-5. Close → "Details share karti hoon, dhanyavaad!"
-
-RESPONSE STYLE EXAMPLES:
-User: "haan" → "Achha, flat ya villa chahiye?"
-User: "flat chahiye" → "Great, location bataiye?"
-User: "pune" → "Budget kitna hai roughly?"
-User: "50 lakh" → "Okay, kab tak chahiye?"
-User: random question → "Ji, aap kaunsi property dekh rahe hain?"
-
-IDENTITY: You are {agent_name} from {company}. Never break character.
+BEHAVIOUR
+- Greeting can be prerecorded; after that you improvise like a human.
+- First understand intent or need, then ask follow-ups; no fixed checklist.
+- Use only the last 2-3 turns of context to stay focused.
+- If the caller refuses ("nahi chahiye"), acknowledge politely once and keep the door open for future interest.
+- If the caller interrupts, stop and respond to the new point.
+- If the caller asks what you do, answer directly in simple Hindi.
+- Keep responses short, friendly, and conversational Hindi, not formal.
 """
 
-from livekit import agents, api
+from livekit import agents, api, rtc
 from livekit.agents import AgentSession, Agent
+from livekit.agents.types import NOT_GIVEN
+from livekit.agents.utils.audio import AudioByteStream
 from livekit.agents.voice.room_io import RoomOptions, AudioInputOptions
 from livekit.plugins import (
     openai as lk_openai,
@@ -200,18 +507,6 @@ except ImportError as _pipeline_err:
         "Pipeline services not available (%s). Falling back to OpenAI Realtime.",
         _pipeline_err,
     )
-
-# Load environment variables
-def load_environment() -> None:
-    """Load env files with project-local values taking precedence."""
-    root_dir = Path(__file__).resolve().parent.parent # Project root
-    # Load broader/default files first, then override with local project env.
-    for env_path in (root_dir / "backend" / ".env.local", root_dir / ".env.local", root_dir / ".env"):
-        if env_path.exists():
-            load_dotenv(env_path, override=True)
-
-
-load_environment()
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -329,6 +624,12 @@ def _repair_mojibake(value: str | None) -> str | None:
         except UnicodeError:
             continue
     return text
+
+
+def _normalize_text(value: str | None) -> str:
+    """Normalize text for fast-path matching across scripts and mixed encodings."""
+    repaired = _repair_mojibake(value) or ""
+    return unicodedata.normalize("NFKC", repaired).casefold().strip()
 
 
 def _default_first_message(agent_name: str, company: str, language: str) -> str:
@@ -851,6 +1152,18 @@ def prewarm(proc: agents.JobProcess) -> None:
     # Pre-generate greeting/filler audio clips at process startup (Layer 1).
     # This runs once per worker process so the first call has zero TTS latency.
     if _HAS_LAYERS:
+        agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
+        company = os.getenv("AGENT_COMPANY_NAME", "Anantasutra")
+        _layer1.add_clip("greeting_hi", _default_first_message(agent_name, company, "hi"))
+        _layer1.add_clip("greeting_en", _default_first_message(agent_name, company, "en"))
+        _layer1.add_clip("identity_hi", f"Main {agent_name} bol rahi hoon, {company} se.")
+        _layer1.add_clip("what_i_do_hi", "Main property options shortlist karne mein help karti hoon.")
+        _layer1.add_clip("fallback_moment_hi", "Haan, sun rahi hoon, ek moment...")
+        _layer1.add_clip("fallback_wait_hi", "Theek hai, ek sec dekh rahi hoon...")
+        _layer1.add_clip("ask_property_type_hi", "Ji, kis type ki property dekh rahe hain?")
+        _layer1.add_clip("ask_location_hi", "Achha, kis area mein dekh rahe hain?")
+        _layer1.add_clip("ask_budget_hi", "Budget kya socha hai?")
+        _layer1.add_clip("ask_timeline_hi", "Kab tak lena plan kar rahe hain?")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
@@ -866,6 +1179,7 @@ async def _speak_scripted_line(
     *,
     text: str,
     allow_interruptions: bool = True,
+    resolves_turn: bool = True,
 ) -> None:
     """
     Speak a scripted line directly via the TTS pipeline (bypasses LLM).
@@ -874,8 +1188,16 @@ async def _speak_scripted_line(
         return  # prevent duplicate
     _agent_is_speaking[0] = True
     try:
-        session.history.add_message(content=text, role="assistant")
-        await session.say(text, allow_interruptions=allow_interruptions)
+        _remember_manual_agent_text(session, text, resolves_turn=resolves_turn)
+        if resolves_turn:
+            session.history.add_message(content=text, role="assistant")
+        cached_pcm = _prerecorded_clip_for_text(text, _get_default_language())
+        await session.say(
+            text,
+            audio=_pcm_audio_stream(cached_pcm) if cached_pcm else NOT_GIVEN,
+            allow_interruptions=allow_interruptions,
+            add_to_chat_ctx=False,
+        )
         await asyncio.sleep(0.1)  # allow scheduler reset
     finally:
         _agent_is_speaking[0] = False
@@ -1119,6 +1441,13 @@ async def entrypoint(ctx: agents.JobContext):
     # announcement arrives early, reducing unnecessary silence for the caller.
     _carrier_detected_at: list[float] = [0.0]
     reprompt_task: asyncio.Task | None = None
+    _active_turn_id: list[int] = [0]
+    _pending_turn_id: list[int] = [0]
+    _layer2_task: list[asyncio.Task | None] = [None]
+    _safety_task: list[asyncio.Task | None] = [None]
+    _agent_state: list[str] = ["initializing"]
+    _user_state: list[str] = ["away"]
+    _call_failed = asyncio.Event()
 
     # ── Build pipeline: Deepgram STT + OpenAI LLM + Sarvam TTS + Silero VAD ──
     _stt, _llm, _tts, _vad = _build_pipeline_components()
@@ -1133,9 +1462,9 @@ async def entrypoint(ctx: agents.JobContext):
             tts=_tts,
             tools=fnc_ctx.flatten(),
             allow_interruptions=True,
-            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.10),
-            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.30),
-            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 1.20),
+            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.05),
+            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.18),
+            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.35),
             user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
         )
         if _vad is not None:
@@ -1148,9 +1477,9 @@ async def entrypoint(ctx: agents.JobContext):
             tools=fnc_ctx.flatten(),
             turn_detection="realtime_llm",
             allow_interruptions=True,
-            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.10),
-            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.30),
-            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 1.20),
+            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.05),
+            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.18),
+            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.35),
             user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
         )
 
@@ -1212,6 +1541,32 @@ async def entrypoint(ctx: agents.JobContext):
     except Exception:
         pass
 
+    def _cancel_task(task_ref: list[asyncio.Task | None]) -> None:
+        task = task_ref[0]
+        if task and not task.done():
+            task.cancel()
+        task_ref[0] = None
+
+    def _turn_still_pending(turn_id: int) -> bool:
+        return (
+            _pending_turn_id[0] == turn_id
+            and _active_turn_id[0] == turn_id
+            and not _call_failed.is_set()
+        )
+
+    @session.on("agent_state_changed")
+    def _on_agent_state_changed(ev) -> None:
+        _agent_state[0] = getattr(ev, "new_state", _agent_state[0])
+        if _agent_state[0] == "speaking":
+            _last_agent_response_at[0] = time.time()
+            _cancel_task(_layer2_task)
+
+    @session.on("user_state_changed")
+    def _on_user_state_changed(ev) -> None:
+        _user_state[0] = getattr(ev, "new_state", _user_state[0])
+        if _user_state[0] == "speaking":
+            _cancel_task(_layer2_task)
+
     @session.on("user_input_transcribed")
     def _on_user_input_transcribed(ev) -> None:
         nonlocal last_user_speech_at, reprompt_task
@@ -1269,156 +1624,88 @@ async def entrypoint(ctx: agents.JobContext):
         if reprompt_task and not reprompt_task.done():
             reprompt_task.cancel()
             reprompt_task = None
-        fnc_ctx.set_last_user_utterance(transcript)
-
-        # ── Python-level Conversation Memory ─────────────────────────────────
-        # Track what the user has already told us so we never re-ask.
-        if not hasattr(session, '_conv_memory'):
-            session._conv_memory = {
-                'property_type': None,
-                'location': None,
-                'budget': None,
-                'timeline': None,
-                'stage': 'GREETING',  # GREETING → PROPERTY → LOCATION → BUDGET → TIMELINE → CLOSING
-            }
-
-        mem = session._conv_memory
-
-        # ── Update memory from user speech ────────────────────────────────────
-        t_lower = transcript.lower().strip()
-
-        # Detect property type
-        for kw in ("flat", "villa", "plot", "commercial", "office", "shop", "penthouse", "apartment", "kothi", "bungalow"):
-            if kw in t_lower:
-                mem['property_type'] = kw
-                if mem['stage'] in ('GREETING', 'PROPERTY'):
-                    mem['stage'] = 'LOCATION'
-                break
-
-        # Detect location
-        for kw in ("pune", "mumbai", "delhi", "noida", "gurgaon", "bangalore", "hyderabad", "chennai",
-                    "jaipur", "lucknow", "indore", "bhopal", "ahmedabad", "kolkata", "chandigarh",
-                    "goa", "surat", "nagpur", "navi mumbai", "thane", "greater noida", "faridabad"):
-            if kw in t_lower:
-                mem['location'] = kw
-                if mem['stage'] in ('GREETING', 'PROPERTY', 'LOCATION'):
-                    mem['stage'] = 'BUDGET'
-                break
-
-        # Detect budget (numbers with lakh/crore/k)
-        import re as _re
-        budget_match = _re.search(r'(\d+[\d.,]*)\s*(lakh|lac|crore|cr|k|thousand|hazar|hazaar)', t_lower)
-        if budget_match:
-            mem['budget'] = budget_match.group(0)
-            if mem['stage'] in ('GREETING', 'PROPERTY', 'LOCATION', 'BUDGET'):
-                mem['stage'] = 'TIMELINE'
-
-        # ── Determine next question based on memory ───────────────────────────
-        def _next_question() -> str:
-            if not mem['property_type']:
-                return "Flat, villa ya plot?"
-            if not mem['location']:
-                return "Kaunsi location pasand hai?"
-            if not mem['budget']:
-                return "Budget kitna socha hai?"
-            if not mem['timeline']:
-                return "Kab tak chahiye?"
-            return "Details share karti hoon, dhanyavaad!"
-
-        # ── FAST INTENT ROUTER (No LLM, instant response) ────────────────────
-        fast_reply = None
-
-        # Affirmative / confirmation responses
-        if t_lower in ("haan", "ha", "ji", "ji haan", "haan ji", "yes", "okay", "ok",
-                        "theek hai", "thik hai", "sahi hai", "bilkul", "sure", "haan bolo",
-                        "bolo", "boliye", "batao", "bataye", "haan batao", "acha", "achha"):
-            fast_reply = _next_question()
-
-        # Negative / not interested
-        elif t_lower in ("nahi", "nhi", "no", "not interested", "nahi chahiye", "mat karo",
-                         "band karo", "abhi nahi", "baad mein", "busy hoon", "kaam hai"):
-            fast_reply = "Koi baat nahi, phir call karungi. Dhanyavaad!"
-            mem['stage'] = 'CLOSING'
-
-        # Property type keywords
-        elif any(kw in t_lower for kw in ("flat", "apartment")):
-            fast_reply = f"Flat, achha! {_next_question()}" if mem['stage'] != 'LOCATION' else _next_question()
-        elif any(kw in t_lower for kw in ("villa", "bungalow", "kothi")):
-            fast_reply = f"Villa, nice! {_next_question()}" if mem['stage'] != 'LOCATION' else _next_question()
-        elif "plot" in t_lower:
-            fast_reply = f"Plot chahiye. {_next_question()}" if mem['stage'] != 'LOCATION' else _next_question()
-        elif "commercial" in t_lower or "office" in t_lower or "shop" in t_lower:
-            fast_reply = f"Commercial space. {_next_question()}" if mem['stage'] != 'LOCATION' else _next_question()
-
-        # Identity questions
-        elif any(kw in t_lower for kw in ("kaun", "naam kya", "kaun bol", "who", "kya naam")):
-            agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
-            fast_reply = f"Ji, main {agent_name}, Anantasutra se."
-
-        # Greeting
-        elif any(kw in t_lower for kw in ("hello", "namaste", "namaskar", "hi")):
-            fast_reply = _next_question()
-
-        # Bye / end
-        elif any(kw in t_lower for kw in ("bye", "alvida", "tata", "thanks", "thank you", "dhanyavaad")):
-            fast_reply = "Dhanyavaad, aapka din shubh ho!"
-            mem['stage'] = 'CLOSING'
-
-        # Budget was given (detected above via regex)
-        elif budget_match:
-            fast_reply = _next_question()
-
-        # Location was given (detected above)
-        elif mem['location'] and mem['stage'] == 'BUDGET':
-            fast_reply = _next_question()
-
-        if fast_reply:
-            logger.info("⚡ FAST INTENT: '%s' → '%s' [memory: %s]", t_lower[:50], fast_reply, mem)
+        _cancel_task(_layer2_task)
+        _cancel_task(_safety_task)
+        if _agent_is_speaking[0]:
             try:
                 session.interrupt()
             except Exception:
                 pass
-            asyncio.create_task(_speak_scripted_line(session, text=fast_reply))
-            session.history.add_message(content=transcript, role="user")
+        fnc_ctx.set_last_user_utterance(transcript)
+        _active_turn_id[0] += 1
+        turn_id = _active_turn_id[0]
+        _pending_turn_id[0] = turn_id
+
+        # -- Short conversation memory (last few turns) --
+        _push_recent_turn(session, "user", transcript)
+
+        fast_reply = _build_fast_reply(session, transcript)
+        if fast_reply:
+            logger.info("FAST PATH: '%s' -> '%s'", _safe_log_text(transcript), fast_reply)
+            _pending_turn_id[0] = 0
+            asyncio.create_task(
+                _speak_scripted_line(
+                    session,
+                    text=fast_reply,
+                    allow_interruptions=True,
+                    resolves_turn=True,
+                )
+            )
             return
 
-        # ── FILLER DISABLED — fillers caused leakage into final output ──────
+        # -- Layer 2: short filler only while Layer 3 is still thinking --
+        if _HAS_LAYERS:
+            async def _say_filler(filler_text: str) -> None:
+                await _speak_scripted_line(
+                    session,
+                    text=filler_text,
+                    allow_interruptions=True,
+                    resolves_turn=False,
+                )
 
-        # ── LLM Safety Net: fallback if LLM doesn't respond in 3s ─────────
-        # The LLM TTFB is 4-7s on gpt-4o-mini. If the fast intent didn't match,
-        # we let the LLM try but set a hard 3-second safety net. If the LLM
-        # hasn't produced any output by then, we fire a context-aware fallback
-        # so the caller never hears dead silence.
-        _llm_safety_speech_at = time.time()
+            def _can_inject_filler() -> bool:
+                return (
+                    _turn_still_pending(turn_id)
+                    and _user_state[0] != "speaking"
+                    and _agent_state[0] != "speaking"
+                )
+
+            _layer2_task[0] = asyncio.create_task(
+                _layer2.monitor_and_inject(
+                    session,
+                    time.time(),
+                    can_inject=_can_inject_filler,
+                    say_fn=_say_filler,
+                    allow_interruptions=True,
+                )
+            )
 
         async def _llm_safety_net():
-            await asyncio.sleep(3.0)
-            # If agent already spoke (LLM responded in time), skip.
-            if _last_agent_response_at[0] > _llm_safety_speech_at:
+            await asyncio.sleep(_get_float_env("LLM_SAFETY_TIMEOUT_SEC", 8.0))
+            if not _turn_still_pending(turn_id) or _user_state[0] == "speaking" or _agent_state[0] == "speaking":
                 return
-            if _agent_is_speaking[0]:
-                return
-            # Determine fallback based on conversation memory
-            mem = getattr(session, '_conv_memory', None)
-            if mem:
-                if not mem.get('property_type'):
-                    fallback = "Flat, villa ya plot chahiye?"
-                elif not mem.get('location'):
-                    fallback = "Kaunsi location pasand hai?"
-                elif not mem.get('budget'):
-                    fallback = "Budget kitna socha hai?"
-                else:
-                    fallback = "Ji, aur kuch batayein?"
-            else:
-                fallback = "Ji, aap kaunsi property dekh rahe hain?"
-            logger.warning("⚡ LLM SAFETY NET: 3s timeout → sending fallback: %s", fallback)
+            _cancel_task(_layer2_task)
+            fallback = _choose_fallback(session, user_hint=transcript)
+            logger.warning("LLM SAFETY NET: timeout -> sending fallback: %s", fallback)
             try:
                 session.interrupt()
             except Exception:
                 pass
-            await _speak_scripted_line(session, text=fallback)
+            try:
+                await _speak_scripted_line(
+                    session,
+                    text=fallback,
+                    allow_interruptions=True,
+                    resolves_turn=True,
+                )
+                _pending_turn_id[0] = 0
+            except asyncio.CancelledError:
+                raise
+            except Exception as fallback_err:
+                logger.debug("LLM safety-net fallback failed: %s", fallback_err)
+                _agent_is_speaking[0] = False
 
-        asyncio.create_task(_llm_safety_net())
+        _safety_task[0] = asyncio.create_task(_llm_safety_net())
 
         # ── Layer 3 latency tracking: STT end → LLM start ─────────────────
         call_id = ctx.room.name
@@ -1431,10 +1718,6 @@ async def entrypoint(ctx: agents.JobContext):
         if _HAS_TRANSCRIPTION:
             entry = _validate_transcript(transcript, role="user", call_id=call_id)
             asyncio.ensure_future(broadcast_transcript(entry))
-
-        # ── Layer 2: disabled (filler leakage) ─────────────────────────────
-        # if _HAS_LAYERS:
-        #     asyncio.ensure_future(_layer2.monitor_and_inject(session, time.time()))
 
     @session.on("conversation_item_added")
     def _on_conversation_item_added(ev) -> None:
@@ -1462,27 +1745,36 @@ async def entrypoint(ctx: agents.JobContext):
                 logger.info("[AGENT]: %s", _safe_log_text(text))
             else:
                 logger.info("[%s]: %s", role.upper(), _safe_log_text(text))
-            
+
             if role == "assistant":
                 now = time.time()
+                manual_meta = _consume_manual_agent_text(session, text)
                 _last_agent_response_at[0] = now
+                _push_recent_turn(session, "assistant", text)
+                _cancel_task(_layer2_task)
+                if not manual_meta or manual_meta.get("resolves_turn", True):
+                    _pending_turn_id[0] = 0
+                    _cancel_task(_safety_task)
 
-                # ── Latency: TTS first audio ──────────────────────────────
-                call_id = ctx.room.name
-                if _HAS_LATENCY:
-                    ev = _latency_tracker.current(call_id)
-                    if ev:
-                        if ev.llm_first_token is None:
-                            ev.llm_first_token = now
-                        ev.tts_first_audio = now
-                        ev.llm_end = now
-                        ev.tts_end = now
-                        _latency_tracker.finish_turn(call_id)
+                # Record first real assistant output for latency metrics.
+                if not manual_meta:
+                    call_id = ctx.room.name
+                    if _HAS_LATENCY:
+                        ev = _latency_tracker.current(call_id)
+                        if ev:
+                            if ev.llm_first_token is None:
+                                ev.llm_first_token = now
+                            ev.tts_first_audio = now
+                            ev.llm_end = now
+                            ev.tts_end = now
+                            _latency_tracker.finish_turn(call_id)
 
-                # ── Broadcast agent transcript ────────────────────────────
-                if _HAS_TRANSCRIPTION:
-                    entry = _validate_transcript(text, role="agent", call_id=call_id)
-                    asyncio.ensure_future(broadcast_transcript(entry))
+                    if _HAS_TRANSCRIPTION:
+                        entry = _validate_transcript(text, role="agent", call_id=call_id)
+                        asyncio.ensure_future(broadcast_transcript(entry))
+
+            elif role == "user":
+                _push_recent_turn(session, "user", text)
 
     async def _reprompt_if_no_speech() -> None:
         """Send up to 2 reprompts if the caller stays silent after the greeting.
@@ -1545,19 +1837,17 @@ async def entrypoint(ctx: agents.JobContext):
         # returns from the API, saving the API-response round-trip delay.
         _greeting_triggered = False
         _greeting_task: asyncio.Task | None = None
-        # Set when the SIP call fails so the greeting task aborts before generate_reply.
-        _call_failed = asyncio.Event()
 
         async def _watchdog_agent_response() -> None:
             """
             Safety net: if the user spoke but the agent hasn't responded within
-            AGENT_RESPONSE_WATCHDOG_SEC (default 2s), send a direct fallback
+            AGENT_RESPONSE_WATCHDOG_SEC (default 8s), send a direct fallback
             via TTS — bypassing the LLM entirely for instant recovery.
 
             Previous approach used generate_reply() which itself takes 4-7s
             through the LLM, defeating the purpose of the watchdog.
             """
-            watchdog_sec = _get_float_env("AGENT_RESPONSE_WATCHDOG_SEC", 2.0)
+            watchdog_sec = _get_float_env("AGENT_RESPONSE_WATCHDOG_SEC", 8.0)
             try:
                 while True:
                     await asyncio.sleep(0.5)
@@ -1569,24 +1859,17 @@ async def entrypoint(ctx: agents.JobContext):
                     # Trigger only when: user spoke recently, agent hasn't responded,
                     # and enough time has passed to rule out normal generation latency.
                     if (
+                        _pending_turn_id[0] != 0
+                        and
                         last_user_speech_at > last_agent
                         and user_spoke_ago >= watchdog_sec
                         and user_spoke_ago < 30.0  # don't trigger if user left
                         and not _agent_is_speaking[0]
+                        and _agent_state[0] != "speaking"
+                        and _user_state[0] != "speaking"
                     ):
-                        # Determine context-aware fallback from conversation memory
-                        mem = getattr(session, '_conv_memory', None)
-                        if mem:
-                            if not mem.get('property_type'):
-                                wd_fallback = "Flat, villa ya plot chahiye?"
-                            elif not mem.get('location'):
-                                wd_fallback = "Kaunsi location pasand hai?"
-                            elif not mem.get('budget'):
-                                wd_fallback = "Budget kitna socha hai?"
-                            else:
-                                wd_fallback = "Ji, aur kuch batayein?"
-                        else:
-                            wd_fallback = "Ji, aap kaunsi property dekh rahe hain?"
+                        _cancel_task(_layer2_task)
+                        wd_fallback = _choose_fallback(session)
 
                         logger.warning(
                             "Watchdog: user spoke %.1fs ago, agent silent → "
@@ -1599,7 +1882,13 @@ async def entrypoint(ctx: agents.JobContext):
                         except Exception:
                             pass
                         try:
-                            await _speak_scripted_line(session, text=wd_fallback)
+                            await _speak_scripted_line(
+                                session,
+                                text=wd_fallback,
+                                allow_interruptions=True,
+                                resolves_turn=True,
+                            )
+                            _pending_turn_id[0] = 0
                         except Exception as wd_err:
                             logger.debug("Watchdog fallback failed: %s", wd_err)
                             # Force-reset speaking flag so agent isn't permanently stuck

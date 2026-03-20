@@ -26,13 +26,10 @@ logger = logging.getLogger("layer2-fillers")
 # ─── Filler pools ────────────────────────────────────────────────────────────
 
 _HINDI_FILLERS = [
-    "Haan ji, samajh rahi hoon...",
-    "Achha ji...",
-    "Bilkul, ek second...",
-    "Haan, dekhti hoon...",
-    "Theek hai, ek second...",
-    "Ji, samajh gayi...",
-    "Dekhti hoon abhi...",
+    "Achha...",
+    "Bilkul...",
+    "Ek sec...",
+    "Main check kar rahi hoon...",
 ]
 
 _ENGLISH_FILLERS = [
@@ -45,10 +42,9 @@ _ENGLISH_FILLERS = [
 ]
 
 _HINGLISH_FILLERS = [
-    "Haan, ek second...",
-    "Okay ji, check karte hain...",
-    "Theek hai, just a moment...",
-    "Bilkul, one second...",
+    "Achha...",
+    "Bilkul...",
+    "Ek sec...",
 ]
 
 
@@ -110,6 +106,10 @@ class FillerLayer:
         self,
         session,  # AgentSession
         processing_start: Optional[float] = None,
+        on_injected=None,
+        can_inject=None,
+        say_fn=None,
+        allow_interruptions: bool = True,
     ) -> None:
         """
         Wait `delay_threshold` seconds, then inject ONE filler if the agent
@@ -130,6 +130,10 @@ class FillerLayer:
                 logger.debug("Layer2: Filler skipped (too soon after last one).")
                 return
 
+            if can_inject is not None and not can_inject():
+                logger.debug("Layer2: Filler skipped (state no longer allows injection).")
+                return
+
             filler = self._pick_filler()
             self._last_injected_at = time.time()
             elapsed = (time.time() - _start) * 1000
@@ -139,7 +143,19 @@ class FillerLayer:
                 elapsed,
                 filler,
             )
-            await session.say(filler)
+            if on_injected is not None:
+                try:
+                    on_injected(filler)
+                except Exception as callback_err:
+                    logger.debug("Layer2: on_injected callback failed: %s", callback_err)
+            if say_fn is not None:
+                await say_fn(filler)
+            else:
+                await session.say(
+                    filler,
+                    allow_interruptions=allow_interruptions,
+                    add_to_chat_ctx=False,
+                )
 
         except asyncio.CancelledError:
             # Normal — agent started speaking before the delay expired.
@@ -157,6 +173,6 @@ class FillerLayer:
 # injects English fillers during a Hindi-language call.  Callers that
 # actually want English fillers can set FILLER_LANGUAGE=en in the env.
 filler_layer = FillerLayer(
-    delay_threshold=float(__import__("os").getenv("FILLER_DELAY_SEC", "0.9")),
+    delay_threshold=float(__import__("os").getenv("FILLER_DELAY_SEC", "1.2")),
     language=__import__("os").getenv("FILLER_LANGUAGE", "hi"),
 )

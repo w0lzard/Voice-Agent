@@ -78,8 +78,8 @@ async def _fetch_audio(
     speaker: str,
     model: str,
     language: str,
-    pace: float = 0.95,
-    loudness: float = 1.3,
+    pace: float = 0.98,
+    loudness: float = 1.15,
 ) -> bytes:
     """
     Call Sarvam TTS REST API.
@@ -255,8 +255,8 @@ class SarvamTTS(tts.TTS):
         self._speaker  = speaker  or os.getenv("SARVAM_SPEAKER", "anushka")
         self._model    = model
         self._language = language or os.getenv("SARVAM_LANGUAGE", "hi-IN")
-        self._pace     = pace or float(os.getenv("SARVAM_TTS_PACE", "1.15"))
-        self._loudness = loudness or float(os.getenv("SARVAM_TTS_LOUDNESS", "1.3"))
+        self._pace     = pace or float(os.getenv("SARVAM_TTS_PACE", "0.98"))
+        self._loudness = loudness or float(os.getenv("SARVAM_TTS_LOUDNESS", "1.15"))
 
         if not self._api_key:
             logger.warning(

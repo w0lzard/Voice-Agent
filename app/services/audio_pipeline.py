@@ -41,8 +41,8 @@ def build_llm():
     return lk_openai.LLM(
         model=model,
         api_key=os.getenv("OPENAI_API_KEY"),
-        temperature=0.3,
-        max_completion_tokens=30,
+        temperature=float(os.getenv("OPENAI_LLM_TEMPERATURE", "0.15")),
+        max_completion_tokens=int(os.getenv("OPENAI_LLM_MAX_TOKENS", "16")),
     )
 
 
@@ -90,8 +90,11 @@ def build_vad():
         from livekit.plugins import silero
         # VAD is ultra-over-sensitive to Indian PSTN noise, holding turn state for 6+ seconds.
         # We crank up activation_threshold so it only triggers on real, confident human speech.
-        vad = silero.VAD.load(activation_threshold=0.6, min_speech_duration=0.15)
-        logger.info("VAD: Silero loaded with threshold=0.6")
+        vad = silero.VAD.load(
+            activation_threshold=float(os.getenv("VAD_ACTIVATION_THRESHOLD", "0.45")),
+            min_speech_duration=float(os.getenv("VAD_MIN_SPEECH_DURATION", "0.08")),
+        )
+        logger.info("VAD: Silero loaded")
         return vad
     except Exception as exc:
         logger.warning("Silero VAD not available (%s) — using None", exc)

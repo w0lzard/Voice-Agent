@@ -23,12 +23,16 @@ logger = logging.getLogger("layer1-prerecorded")
 
 # ── Default clips ─────────────────────────────────────────────────────────────
 DEFAULT_CLIPS: dict[str, str] = {
-    "greeting_hi": "Namaste, mera naam Shubhi hai aur main Anantasutra se bol rahi hoon.",
-    "greeting_en": "Hello! This is Shubhi from Anantasutra. How can I help you today?",
-    "filler_checking": "Ek second, main check kar rahi hoon.",
-    "filler_moment":   "Ji, ek moment.",
-    "filler_sure":     "Bilkul, samajh gayi.",
-    "filler_okay":     "Achha ji.",
+    "greeting_hi": "Namaste, main Shubhi Anantasutra se bol rahi hoon. Kya abhi baat karna theek rahega?",
+    "greeting_en": "Hello, this is Shubhi from Anantasutra. Can you hear me?",
+    "filler_checking": "Main check kar rahi hoon...",
+    "filler_moment":   "Ek sec...",
+    "filler_sure":     "Bilkul...",
+    "filler_okay":     "Achha...",
+    "fallback_listen": "Aap thoda aur bata sakte hain?",
+    "fallback_thinking": "Ek second, samajhne dijiye...",
+    "identity_hi": "Main Shubhi bol rahi hoon, Anantasutra se.",
+    "what_i_do_hi": "Main property options shortlist karne mein help karti hoon.",
     "busy_hi": (
         "Namaste! Abhi hamare saare agents busy hain. "
         "Kripya thodi der baad call karein. Dhanyavaad!"
@@ -121,8 +125,8 @@ class PrerecordedLayer:
                     "speaker":              self._speaker,
                     "model":                self._model,
                     "pitch":                0,
-                    "pace":                 float(os.getenv("SARVAM_TTS_PACE", "1.15")),
-                    "loudness":             float(os.getenv("SARVAM_TTS_LOUDNESS", "1.3")),
+                    "pace":                 float(os.getenv("SARVAM_TTS_PACE", "0.98")),
+                    "loudness":             float(os.getenv("SARVAM_TTS_LOUDNESS", "1.15")),
                     "speech_sample_rate":   self._sample_rate,
                     "enable_preprocessing": True,
                 },
