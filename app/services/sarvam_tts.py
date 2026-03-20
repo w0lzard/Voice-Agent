@@ -82,56 +82,58 @@ async def _fetch_audio(
     loudness: float = 1.0,
 ) -> bytes:
     """
-    Call Sarvam TTS REST API.
-    Returns raw 16-bit signed PCM at _SAMPLE_RATE Hz, mono.
-    Results are process-cached keyed by (speaker, language, text).
+    Fetch audio from Sarvam TTS API with retry logic.
     """
-    cache_key = f"{speaker}|{language}|{text}"
-    if cache_key in _AUDIO_CACHE:
-        logger.debug("Sarvam cache hit (%d chars)", len(text))
-        return _AUDIO_CACHE[cache_key]
-
-    t0 = time.perf_counter()
-
-    async with aiohttp.ClientSession() as sess:
-        resp = await sess.post(
-            _API_URL,
-            headers={
-                "api-subscription-key": api_key,
-                "Content-Type": "application/json",
-            },
-            json={
-                "inputs":               [text[:_MAX_CHARS]],
-                "target_language_code": language,
-                "speaker":              speaker,
-                "model":                model,
-                "pitch":                0,
-                "pace":                 pace,
-                "loudness":             loudness,
-                "speech_sample_rate":   _SAMPLE_RATE,
-                "enable_preprocessing": True,
-            },
-            timeout=aiohttp.ClientTimeout(total=3),
-        )
-        if resp.status != 200:
-            body = await resp.text()
-            raise RuntimeError(f"Sarvam TTS HTTP {resp.status}: {body[:300]}")
-        data = await resp.json()
-
-    ttfb_ms = (time.perf_counter() - t0) * 1000
-    logger.info("Sarvam TTS %.0fms | speaker=%s | %d chars", ttfb_ms, speaker, len(text))
-
-    audio_b64 = data["audios"][0]
-    wav_bytes  = base64.b64decode(audio_b64)
-    pcm, sr    = _wav_to_pcm(wav_bytes)
-
-    if sr != _SAMPLE_RATE:
-        pcm = _resample_mono16(pcm, sr, _SAMPLE_RATE)
-
-    if len(_AUDIO_CACHE) < _CACHE_MAX:
-        _AUDIO_CACHE[cache_key] = pcm
-
-    return pcm
+    max_retries = 3
+    base_timeout = 5  # Increased from 3 to 5 seconds
+    
+    for attempt in range(max_retries):
+        try:
+            async with aiohttp.ClientSession() as session:
+                resp = await session.post(
+                    "https://api.sarvam.ai/speech_synthesize",
+                    headers={
+                        "api-subscription-key": api_key,
+                        "Content-Type": "application/json",
+                    },
+                    json={
+                        "inputs":               [text[:_MAX_CHARS]],
+                        "target_language_code": language,
+                        "speaker":              speaker,
+                        "model":                model,
+                        "pitch":                0,
+                        "pace":                 pace,
+                        "loudness":             loudness,
+                        "speech_sample_rate":   _SAMPLE_RATE,
+                        "enable_preprocessing": True,
+                    },
+                    timeout=aiohttp.ClientTimeout(total=base_timeout + (attempt * 2)),  # Progressive timeout
+                )
+                if resp.status != 200:
+                    body = await resp.text()
+                    if attempt == max_retries - 1:
+                        raise RuntimeError(f"Sarvam TTS HTTP {resp.status}: {body[:300]}")
+                    logger.warning(f"Sarvam TTS attempt {attempt + 1} failed: {resp.status}, retrying...")
+                    continue
+                    
+                data = await resp.json()
+                audio_b64 = data["audios"][0]["audio_base64"]
+                audio_bytes = base64.b64decode(audio_b64)
+                
+                # Convert to PCM format
+                pcm, sr = _wav_to_pcm(audio_bytes)
+                pcm = _resample_mono16(pcm, sr, _SAMPLE_RATE)
+                return pcm
+                
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            if attempt == max_retries - 1:
+                raise RuntimeError(f"Sarvam TTS failed after {max_retries} attempts: {e}")
+            logger.warning(f"Sarvam TTS attempt {attempt + 1} failed: {e}, retrying...")
+            await asyncio.sleep(0.5 * (attempt + 1))  # Progressive delay
+            continue
+    
+    # Fallback to empty audio
+    return b"\x00" * _SAMPS_PER_FRAME * 2
 
 
 # STT engine noise tokens that should never be synthesized as speech
@@ -255,7 +257,7 @@ class SarvamTTS(tts.TTS):
         self._speaker  = speaker  or os.getenv("SARVAM_SPEAKER", "anushka")
         self._model    = model
         self._language = language or os.getenv("SARVAM_LANGUAGE", "hi-IN")
-        self._pace     = pace or float(os.getenv("SARVAM_TTS_PACE", "0.94"))
+        self._pace     = pace or float(os.getenv("SARVAM_TTS_PACE", "1.0"))
         self._loudness = loudness or float(os.getenv("SARVAM_TTS_LOUDNESS", "1.0"))
 
         if not self._api_key:

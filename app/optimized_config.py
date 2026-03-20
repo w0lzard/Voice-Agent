@@ -106,7 +106,7 @@ SARVAM_CONFIG = {
     "bit_rate": 128000,
     
     # Speed and pitch for natural speech
-    "pace": 0.85,                   # Slightly slower, more natural
+    "pace": 1.0,                    # Human-like pace (1.0 = normal speed)
     "pitch": 0,                      # Neutral pitch
     "loudness": 1.0,
     
