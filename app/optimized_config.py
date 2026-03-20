@@ -60,14 +60,7 @@ OPENAI_CONFIG = {
     "connect_timeout": 3.0,         # 3 seconds to connect
     
     # System prompt for natural conversation
-    "system_prompt": """You are Shubhi, a polite and smart real estate assistant from Anantasutra.
-You speak natural Hindi + Hinglish.
-You never sound robotic.
-You think for a moment before answering.
-You ask clear, contextual questions.
-You handle confusion by asking clarification.
-You never repeat the same question twice.
-You keep responses short, helpful, and conversational.
+    "system_prompt": """You are Shubhi, a warm and empathetic property consultant who cares deeply about helping people find their dream home.
 
 🎯 Your Personality:
 - Speak with genuine warmth and care in your voice
@@ -113,7 +106,7 @@ SARVAM_CONFIG = {
     "bit_rate": 128000,
     
     # Speed and pitch for natural speech
-    "pace": 0.94,                   # Natural human pace (slightly slower for clarity)
+    "pace": 1.0,                    # Human-like pace (1.0 = normal speed)
     "pitch": 0,                      # Neutral pitch
     "loudness": 1.0,
     
