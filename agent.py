@@ -719,7 +719,7 @@ def _build_pipeline_components():
     # Map hi → hi-IN, en → en-IN for Sarvam
     sarvam_lang = {"hi": "hi-IN", "en": "en-IN"}.get(lang, "hi-IN")
 
-    stt, llm_inst, tts, vad = build_pipeline(language=lang, speaker="anushka")
+    stt, llm_inst, tts, vad = build_pipeline(language=lang, speaker=os.getenv("SARVAM_SPEAKER", "anushka"))
     logger.info(
         "Pipeline: Deepgram STT (%s) | OpenAI LLM | Sarvam TTS (%s)",
         lang,
