@@ -118,8 +118,10 @@ async def _fetch_audio(
                     
                 data = await resp.json()
                 
-                # Debug: Log the full response structure
-                logger.debug(f"Sarvam API response: {data}")
+                # Debug: Log full response structure
+                logger.error(f"Sarvam API full response: {data}")
+                logger.error(f"Response type: {type(data)}")
+                logger.error(f"Response keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
                 
                 # Validate response structure
                 if "audios" not in data or not data["audios"]:
@@ -127,9 +129,11 @@ async def _fetch_audio(
                     raise RuntimeError(f"Sarvam TTS: No audio data in response")
                 
                 audio_data = data["audios"][0]
+                logger.error(f"Audio data keys: {list(audio_data.keys()) if isinstance(audio_data, dict) else 'Not a dict'}")
+                
                 if "audio_base64" not in audio_data:
                     logger.error(f"Sarvam TTS: Invalid audio data - missing 'audio_base64': {audio_data}")
-                    # Check if there's an error message in the response
+                    # Check if there's an error message in response
                     if "error" in data:
                         raise RuntimeError(f"Sarvam TTS API error: {data['error']}")
                     raise RuntimeError(f"Sarvam TTS: No audio_base64 in response")
