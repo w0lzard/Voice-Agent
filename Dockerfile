@@ -13,6 +13,9 @@ RUN uv pip install --system -r requirements.txt
 # Copy the entire app package
 COPY app ./app
 
+# DEBUG: Verify file structure
+RUN ls -R /opt/voice-agent
+
 # Ensure python can resolve "app.*" modules
 ENV PYTHONPATH=/opt/voice-agent
 
