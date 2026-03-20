@@ -10,7 +10,7 @@ from livekit import api
 from livekit.protocol import sip as sip_proto
 
 def load_environment() -> None:
-    root_dir = Path(__file__).resolve().parent
+    root_dir = Path(__file__).resolve().parent.parent
     for env_path in (root_dir / "backend" / ".env.local", root_dir / ".env.local", root_dir / ".env"):
         if env_path.exists():
             load_dotenv(env_path, override=True)

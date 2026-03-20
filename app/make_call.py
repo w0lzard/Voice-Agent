@@ -11,7 +11,7 @@ from livekit import api
 
 def load_environment() -> None:
     """Load env files with project-local values taking precedence."""
-    root_dir = Path(__file__).resolve().parent
+    root_dir = Path(__file__).resolve().parent.parent
     for env_path in (root_dir / "backend" / ".env.local", root_dir / ".env.local", root_dir / ".env"):
         if env_path.exists():
             load_dotenv(env_path, override=True)

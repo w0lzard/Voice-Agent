@@ -24,7 +24,7 @@ logger = logging.getLogger("audio-pipeline")
 
 def build_stt(language: Optional[str] = None):
     """Return a configured Deepgram STT instance."""
-    from services.deepgram_stt import build_deepgram_stt
+    from app.services.deepgram_stt import build_deepgram_stt
     return build_deepgram_stt(language=language)
 
 
@@ -67,7 +67,7 @@ def build_tts(
     language: Optional[str] = None,
 ):
     """Return a configured SarvamTTS instance."""
-    from services.sarvam_tts import SarvamTTS
+    from app.services.sarvam_tts import SarvamTTS
 
     spk = speaker  or os.getenv("SARVAM_SPEAKER",  "anushka")
     raw = language or os.getenv("SARVAM_LANGUAGE", "hi-IN")

@@ -28,7 +28,8 @@ from typing import Set
 from dotenv import load_dotenv
 
 # ── Load env ──────────────────────────────────────────────────────────────────
-for _p in [Path("backend/.env.local"), Path(".env.local"), Path(".env")]:
+_root_dir = Path(__file__).resolve().parent.parent
+for _p in (_root_dir / "backend" / ".env.local", _root_dir / ".env.local", _root_dir / ".env"):
     if _p.exists():
         load_dotenv(_p, override=True)
 

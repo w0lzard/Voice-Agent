@@ -8,38 +8,45 @@ import threading
 import sys
 from pathlib import Path
 
-# Add the project root to sys.path so that 'services', 'layers', etc. can be imported
-# reliably even if the script is run from a different CWD or via multiprocessing.
-_root_dir = Path(__file__).resolve().parent
-if str(_root_dir) not in sys.path:
-    sys.path.insert(0, str(_root_dir))
-
 from dotenv import load_dotenv
 import aiohttp
 
-# ── Load .env immediately — layer singletons read env vars at import time ─────
-for _ep in (_root_dir / "backend" / ".env.local", _root_dir / ".env.local", _root_dir / ".env"):
-    if _ep.exists():
-        load_dotenv(_ep, override=True)
+# ── DEBUG: Verifying path and package ─────────────────────────────────────────
+import sys
+import importlib
+print(f"DEBUG: sys.path = {sys.path}")
+print(f"DEBUG: __name__ = {__name__}")
+try:
+    importlib.import_module("app.services")
+    print("DEBUG: ✅ 'app.services' import successful")
+except Exception as e:
+    print(f"DEBUG: ❌ 'app.services' import failed: {e}")
+    # Check if a legacy 'services' exists in path
+    try:
+        importlib.import_module("services")
+        print("DEBUG: ⚠️  Legacy 'services' module found in path!")
+    except ImportError:
+        pass
 
 # ── 3-Layer speech architecture ───────────────────────────────────────────────
 try:
-    from layers.layer1_prerecorded import prerecorded as _layer1
-    from layers.layer2_fillers import filler_layer as _layer2
+    from app.layers.layer1_prerecorded import prerecorded as _layer1
+    from app.layers.layer2_fillers import filler_layer as _layer2
     _HAS_LAYERS = True
-except ImportError:
+except ImportError as e:
+    print(f"DEBUG: Layers import fail: {e}")
     _HAS_LAYERS = False
 
 # ── Latency tracker ────────────────────────────────────────────────────────────
 try:
-    from latency.tracker import tracker as _latency_tracker
+    from app.latency.tracker import tracker as _latency_tracker
     _HAS_LATENCY = True
 except ImportError:
     _HAS_LATENCY = False
 
 # ── Transcription validator ────────────────────────────────────────────────────
 try:
-    from transcription.validator import validate as _validate_transcript, broadcast_transcript
+    from app.transcription.validator import validate as _validate_transcript, broadcast_transcript
     _HAS_TRANSCRIPTION = True
 except ImportError:
     _HAS_TRANSCRIPTION = False
@@ -122,7 +129,7 @@ def _release_call_slot() -> None:
     """Decrement the active-call counter."""
     _slots_read_write(-1)
 
-# Agent conversation script — edit scripts/agent_script.py to change call flow.
+# Agent conversation script — edit app/scripts/agent_script.py to change call flow.
 # Loaded at startup so Railway/Docker deployments don't need scripts/ on sys.path.
 _SCRIPTS_DIR = Path(__file__).resolve().parent / "scripts" / "agent_script.py"
 if _SCRIPTS_DIR.exists():
@@ -180,8 +187,8 @@ from typing import Optional
 
 # ── Pipeline services (Deepgram STT + Sarvam TTS) ─────────────────────────────
 try:
-    from services.sarvam_tts import SarvamTTS
-    from services.audio_pipeline import build_pipeline
+    from app.services.sarvam_tts import SarvamTTS
+    from app.services.audio_pipeline import build_pipeline
     _HAS_PIPELINE_SERVICES = True
 except ImportError as _pipeline_err:
     _HAS_PIPELINE_SERVICES = False
@@ -193,7 +200,7 @@ except ImportError as _pipeline_err:
 # Load environment variables
 def load_environment() -> None:
     """Load env files with project-local values taking precedence."""
-    root_dir = Path(__file__).resolve().parent
+    root_dir = Path(__file__).resolve().parent.parent # Project root
     # Load broader/default files first, then override with local project env.
     for env_path in (root_dir / "backend" / ".env.local", root_dir / ".env.local", root_dir / ".env"):
         if env_path.exists():
@@ -819,7 +826,7 @@ class TransferFunctions(llm.ToolContext):
         # Normally stored to DB; returning confirmation to LLM
         return "Saved to memory successfully."
 def _build_agent_instructions() -> str:
-    """Build agent instructions from scripts/agent_script.py (single source of truth)."""
+    """Build agent instructions from app.scripts/agent_script.py (single source of truth)."""
     agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
     company = os.getenv("AGENT_COMPANY_NAME", "real estate company")
     return AGENT_SCRIPT.format(agent_name=agent_name, company=company)
@@ -1028,7 +1035,7 @@ async def entrypoint(ctx: agents.JobContext):
     async def _prewarm_greeting_tts() -> None:
         try:
             import re
-            from services.sarvam_tts import _fetch_audio as _sarvam_fetch
+            from app.services.sarvam_tts import _fetch_audio as _sarvam_fetch
             # Split into sentences to match blingfire sentence tokenizer splits exactly!
             sentences = [
                 s.strip()
