@@ -7,7 +7,7 @@ import { isAuthorizedAdmin } from '../lib/adminConfig';
 
 const AuthContext = createContext(null);
 
-const PUBLIC_ROUTES = ['/login', '/signup', '/verify', '/verify-phone', '/admin/login'];
+const PUBLIC_ROUTES = ['/login', '/signup', '/verify', '/admin/login'];
 // Routes only the authorized admin email can visit
 const ADMIN_ONLY_ROUTES = ['/admins'];
 

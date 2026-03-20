@@ -5,7 +5,7 @@ import Sidebar from "./Sidebar";
 import TopBar from "./TopBar";
 
 // Pages that should NOT show the dashboard shell
-const PUBLIC_PATHS = ['/login', '/signup', '/verify', '/verify-phone', '/forgot-password'];
+const PUBLIC_PATHS = ['/login', '/signup', '/verify', '/forgot-password'];
 
 export default function AppShell({ children }) {
   const { user } = useAuth();
