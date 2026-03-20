@@ -11,6 +11,14 @@ import sys
 import unicodedata
 from pathlib import Path
 
+# Import enhanced conversation manager
+from .enhanced_conversation import (
+    conversation_manager,
+    handle_user_transcribed,
+    enhanced_speak_scripted_line,
+    handle_user_state_change,
+)
+
 # Automatically map Railway's dynamic PORT to LiveKit's HTTP server
 # Locally, we use 0 (random free port) to avoid conflict with other services
 os.environ["LIVEKIT_HTTP_SERVER_PORT"] = os.getenv("PORT", "0")
@@ -1601,9 +1609,9 @@ async def entrypoint(ctx: agents.JobContext):
             tts=_tts,
             tools=fnc_ctx.flatten(),
             allow_interruptions=True,
-            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.01),
-            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.05),
-            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.2),
+            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.3),
+            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.8),
+            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.4),
             user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
         )
         if _vad is not None:
@@ -1616,9 +1624,9 @@ async def entrypoint(ctx: agents.JobContext):
             tools=fnc_ctx.flatten(),
             turn_detection="realtime_llm",
             allow_interruptions=True,
-            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.01),
-            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.05),
-            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.2),
+            min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.3),
+            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.8),
+            false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.4),
             user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
         )
 
@@ -1705,9 +1713,12 @@ async def entrypoint(ctx: agents.JobContext):
         _user_state[0] = getattr(ev, "new_state", _user_state[0])
         if _user_state[0] == "speaking":
             _cancel_task(_layer2_task)
+        
+        # Enhanced conversation state tracking
+        handle_user_state_change(ev)
 
     @session.on("user_input_transcribed")
-    def _on_user_input_transcribed(ev) -> None:
+    async def _on_user_input_transcribed(ev) -> None:
         nonlocal last_user_speech_at, reprompt_task
         transcript = (getattr(ev, "transcript", "") or "").strip()
         if not transcript:
@@ -1723,6 +1734,14 @@ async def entrypoint(ctx: agents.JobContext):
         # ── Broadcast interim transcript for debug dashboard ─────────────────
         if not is_final:
             asyncio.ensure_future(_broadcast_interim(transcript, ctx.room.name))
+
+        # Enhanced conversation filtering and processing
+        if not conversation_manager.should_process_transcript(transcript, is_final):
+            return
+
+        # Wait for natural pause before processing
+        if not await conversation_manager.wait_for_natural_pause(session):
+            return
 
         # Filter telephony noise — neither carrier announcements nor STT noise
         # tokens (e.g. "<noise>", "<crosstalk>") are real user speech.
@@ -1778,22 +1797,33 @@ async def entrypoint(ctx: agents.JobContext):
         # -- Short conversation memory (last few turns) --
         _push_recent_turn(session, "user", transcript)
 
-        fast_reply = _build_fast_reply(session, transcript)
-        if fast_reply:
-            logger.info("FAST PATH: '%s' -> '%s'", _safe_log_text(transcript), fast_reply)
-            _pending_turn_id[0] = 0
+        # Enhanced fast path with better filtering
+        should_fast, intent = conversation_manager.should_use_fast_path(transcript)
+        if should_fast:
+            # Add natural thinking delay even for fast path
+            await conversation_manager.add_thinking_delay("simple")
+            
+            fast_reply = _build_fast_reply(session, transcript)
+            if fast_reply and not conversation_manager.is_repetition(fast_reply):
+                logger.info("FAST PATH: '%s' -> '%s'", _safe_log_text(transcript), fast_reply)
+                conversation_manager.track_response(fast_reply)
+                conversation_manager.state.last_intent = intent
+                _pending_turn_id[0] = 0
 
-            async def _deliver_fast_reply() -> None:
-                await _cancel_pending_model_reply(session)
-                await _speak_scripted_line(
-                    session,
-                    text=fast_reply,
-                    allow_interruptions=True,
-                    resolves_turn=True,
-                )
+                async def _deliver_fast_reply() -> None:
+                    await _cancel_pending_model_reply(session)
+                    await enhanced_speak_scripted_line(
+                        session,
+                        text=fast_reply,
+                        allow_interruptions=True,
+                        resolves_turn=True,
+                    )
 
-            asyncio.create_task(_deliver_fast_reply())
-            return
+                asyncio.create_task(_deliver_fast_reply())
+                return
+
+        # Add natural thinking delay for LLM processing
+        await conversation_manager.add_thinking_delay(transcript)
 
         # -- Layer 2: short filler only while Layer 3 is still thinking --
         if _HAS_LAYERS:
@@ -1823,7 +1853,7 @@ async def entrypoint(ctx: agents.JobContext):
             )
 
         async def _llm_safety_net():
-            await asyncio.sleep(_get_float_env("LLM_SAFETY_TIMEOUT_SEC", 1.5))
+            await asyncio.sleep(_get_float_env("LLM_SAFETY_TIMEOUT_SEC", 2.5))
             if not _turn_still_pending(turn_id) or _user_state[0] == "speaking" or _agent_state[0] == "speaking":
                 return
             _cancel_task(_layer2_task)
