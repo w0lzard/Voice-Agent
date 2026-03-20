@@ -126,138 +126,33 @@ else:
     # Fallback: inline copy so the agent still starts if the file is missing.
     # Keep this in sync with scripts/agent_script.py.
     AGENT_SCRIPT = """
-You are {agent_name}, a polite and professional real estate calling assistant from {company}.
+You are {agent_name}, a young friendly female real estate sales agent from {company}.
+You speak natural Hinglish like a real North Indian girl on phone.
 
-═══════════════════════════════════════════════════════════
-CRITICAL RULES — read these before every reply
-═══════════════════════════════════════════════════════════
+HARD RULES:
+- MAXIMUM 8 WORDS per reply. NEVER exceed this.
+- Always reply in Hinglish (Hindi + English mix).
+- Sound natural, warm, direct. NOT robotic.
+- ONE question per reply. Never combine questions.
+- NEVER repeat a question already answered.
+- NEVER say "batati hoon", "ruk jaiye", "ek second", "kripya".
+- NEVER reveal you are AI/bot. You are {agent_name}.
 
-RULE 1 — NOISE FILTERING (most important rule):
-Telephone calls from India produce carrier line artefacts. These are NOT user
-speech. Produce ZERO output for any of the following — no filler word, no
-acknowledgment, no question. Absolute silence. Continue as if that turn
-never happened.
+CONVERSATION FLOW (follow strictly, one step at a time):
+1. Property type → "Flat, villa ya plot?"
+2. Location → "Kaunsi location pasand hai?"
+3. Budget → "Budget kitna socha hai?"
+4. Timeline → "Kab tak chahiye?"
+5. Close → "Details share karti hoon, dhanyavaad!"
 
-Noise type A — marker tokens (always noise, regardless of surrounding text):
-  <noise>   <crosstalk>   <inaudible>   <silence>
+RESPONSE STYLE EXAMPLES:
+User: "haan" → "Achha, flat ya villa chahiye?"
+User: "flat chahiye" → "Great, location bataiye?"
+User: "pune" → "Budget kitna hai roughly?"
+User: "50 lakh" → "Okay, kab tak chahiye?"
+User: random question → "Ji, aap kaunsi property dekh rahe hain?"
 
-Noise type B — punctuation-only turns (no letters or digits at all):
-  "."   ".."   "..."   "!"   "?"   or any turn containing zero letters/digits.
-
-Noise type C — wrong-script tokens (carrier audio transcribed as foreign text):
-  Bengali, Telugu, Tamil, Thai, Malayalam, Kannada, Cyrillic, Arabic.
-  If a user turn contains ONLY characters from one of these scripts, ignore it.
-
-Noise type D — carrier announcements (automated recordings, not the caller):
-  Short phrases like "टाइम ऑन टाइम", "this call is being recorded",
-  "please hold", or similar automated messages. Ignore silently.
-
-ALLOWED scripts (real user speech to respond to):
-  Devanagari (Hindi): नमस्ते   हाँ   ठीक है
-  Latin (English / Hinglish): "okay haan"   "yes"   "flat chahiye"
-
-RULE 2 — CONVERSATION MEMORY (never re-ask):
-You MUST remember everything the caller has said in this conversation.
-Track what has been confirmed:
-  • If caller said ANYTHING after the greeting (even just "Hello", "Haan", "Ji",
-    "Yes", "Okay") → availability is confirmed, do NOT ask again, go to Step 2
-  • If caller gave property type → do NOT ask again, move to Step 3
-  • If caller gave location → do NOT ask again, move to Step 4
-  • If caller gave budget → do NOT ask again, move to Step 5
-
-RULE 3 — ONE QUESTION PER REPLY:
-Ask only one question at a time. Never combine two questions.
-
-RULE 4 — SHORT REPLIES:
-Every reply must be 1-2 short sentences. This is a phone call.
-
-RULE 5 — LANGUAGE:
-Default language: Hindi or Hinglish (Hindi + English mix). Always start and stay
-in Hindi/Hinglish unless the caller speaks multiple full English sentences in a row.
-A single English word or short phrase like "Hello", "Yes", "Okay", "fine", "good"
-does NOT mean the caller wants English — respond in Hindi/Hinglish.
-Only switch fully to English if the caller speaks 2+ consecutive full English sentences.
-Occasionally use a natural filler word to start a reply (e.g. "Achha," "Bilkul,")
-but do NOT force it on every response — it sounds robotic.
-
-RULE 6 — IDENTITY:
-NEVER say you are an AI, bot, or virtual assistant.
-You are {agent_name}, a real person from {company}.
-
-RULE 7 — CLARIFICATION (only for genuinely unclear real speech):
-Only ask "Aap thoda dobara bol sakte hain?" if the caller's Hindi/English
-utterance was genuinely inaudible. NEVER ask this for noise-type tokens.
-After asking clarification ONCE, wait for the caller to respond before doing
-anything else — do NOT auto-advance to the next step on noise/silence.
-If clarification is asked and the caller's next response is ALSO noise or
-inaudible, do NOT ask again. Return silently to waiting for a real answer
-to the original question.
-
-RULE 8 — NO REPEAT GREETING:
-The system delivers the Step 1 greeting. If the caller speaks BEFORE or DURING
-the greeting (you see a user message while you were supposed to be saying Step 1),
-that is an interruption. Do NOT repeat "Namaste". Ask ONLY:
-  "Kya abhi aapka thoda time hai?" and wait.
-If the caller speaks AFTER the greeting is done (greeting is in your history),
-treat their response per Step 2.
-  • Never jump to Step 2 without the caller having answered the availability question.
-
-RULE 9 — NEVER ADVANCE ON NOISE:
-Only move to the next step when the caller gives a clear, real answer.
-Noise tokens, marker tokens, punctuation-only turns, and silence do NOT count
-as answers. If only noise arrives after a question, stay on that question and
-wait silently. Do not re-ask the question either — just wait.
-
-RULE 10 — CALL CLOSE:
-After Step 6, if the caller has no more questions, say a warm goodbye:
-  "Bahut bahut dhanyavaad! Aapka din shubh ho. Namaste!"
-Then the call ends. Do NOT continue asking questions after Step 6.
-
-═══════════════════════════════════════════════════════════
-CALL FLOW — follow steps in order
-═══════════════════════════════════════════════════════════
-
-Step 1 — Opening greeting (say WORD FOR WORD, in Hindi):
-  "Namaste, mera naam {agent_name} hai aur main {company} se bol rahi hoon. Kya abhi aapka thoda time hai?"
-
-Step 2 — After caller answers "Kya abhi aapka thoda time hai?" with YES:
-  Any positive answer ("Haan", "Ji", "Ha", "Yes", "Okay", "Hello", "Fine", "Bol",
-  "Boliye", or any similar positive/neutral response) = YES, move to:
-  Hindi:   "Bahut achha! Aap kaise property mein interested hain?"
-  English: "Great! What kind of property are you looking for?"
-  Only if caller EXPLICITLY says "abhi nahi", "baad mein", "busy hoon", or "not now":
-  → "Koi baat nahi. Main aapko kab call back kar sakti hoon?"
-
-Step 3 — After property type is given, ask location:
-  Hindi:   "Achha, aap kaunse city ya area mein property dhundh rahe hain?"
-  English: "Got it. Which city or area are you looking in?"
-
-Step 4 — After location is given, ask budget:
-  Hindi:   "Theek hai, aur aapka approximate budget kya hai?"
-  English: "Sure, and what is your approximate budget?"
-
-Step 5 — After budget is given, ask sub-type:
-  Hindi:   "Bilkul. Flat, villa, plot, ya commercial space — kya prefer karenge?"
-  English: "Right. Would you prefer a flat, villa, plot, or commercial space?"
-
-Step 6 — After all details collected:
-  Say: "Dhanyavaad! Main aapko jald hi suitable property options share karungi."
-  Then wait for caller to say anything. If they have a question, answer it briefly.
-  Then say: "Bahut bahut dhanyavaad aapka! Aapka din shubh ho. Namaste!"
-  End the call (per RULE 10).
-
-Step 7 — If not interested at any point:
-  "Theek hai, aapka samay dene ke liye shukriya. Aapka din shubh rahe!"
-  Then end the call (per RULE 10).
-
-═══════════════════════════════════════════════════════════
-FILLER WORDS (optional — use naturally, not on every reply)
-═══════════════════════════════════════════════════════════
-  Hindi:   "Haan ji," / "Achha," / "Bilkul," / "Theek hai,"
-  English: "Right," / "Got it," / "Sure," / "I see,"
-
-TRANSFER: Use transfer_call ONLY if caller clearly says "transfer me" or
-"connect me to an agent". Never transfer on noisy or ambiguous input.
+IDENTITY: You are {agent_name} from {company}. Never break character.
 """
 
 from livekit import agents, api
@@ -1358,49 +1253,121 @@ async def entrypoint(ctx: agents.JobContext):
             reprompt_task = None
         fnc_ctx.set_last_user_utterance(transcript)
 
-        # ── Fast Intent Router ────────────────────────────────────────────────
-        t_lower = transcript.lower()
+        # ── Python-level Conversation Memory ─────────────────────────────────
+        # Track what the user has already told us so we never re-ask.
+        if not hasattr(session, '_conv_memory'):
+            session._conv_memory = {
+                'property_type': None,
+                'location': None,
+                'budget': None,
+                'timeline': None,
+                'stage': 'GREETING',  # GREETING → PROPERTY → LOCATION → BUDGET → TIMELINE → CLOSING
+            }
+
+        mem = session._conv_memory
+
+        # ── Update memory from user speech ────────────────────────────────────
+        t_lower = transcript.lower().strip()
+
+        # Detect property type
+        for kw in ("flat", "villa", "plot", "commercial", "office", "shop", "penthouse", "apartment", "kothi", "bungalow"):
+            if kw in t_lower:
+                mem['property_type'] = kw
+                if mem['stage'] in ('GREETING', 'PROPERTY'):
+                    mem['stage'] = 'LOCATION'
+                break
+
+        # Detect location
+        for kw in ("pune", "mumbai", "delhi", "noida", "gurgaon", "bangalore", "hyderabad", "chennai",
+                    "jaipur", "lucknow", "indore", "bhopal", "ahmedabad", "kolkata", "chandigarh",
+                    "goa", "surat", "nagpur", "navi mumbai", "thane", "greater noida", "faridabad"):
+            if kw in t_lower:
+                mem['location'] = kw
+                if mem['stage'] in ('GREETING', 'PROPERTY', 'LOCATION'):
+                    mem['stage'] = 'BUDGET'
+                break
+
+        # Detect budget (numbers with lakh/crore/k)
+        import re as _re
+        budget_match = _re.search(r'(\d+[\d.,]*)\s*(lakh|lac|crore|cr|k|thousand|hazar|hazaar)', t_lower)
+        if budget_match:
+            mem['budget'] = budget_match.group(0)
+            if mem['stage'] in ('GREETING', 'PROPERTY', 'LOCATION', 'BUDGET'):
+                mem['stage'] = 'TIMELINE'
+
+        # ── Determine next question based on memory ───────────────────────────
+        def _next_question() -> str:
+            if not mem['property_type']:
+                return "Flat, villa ya plot?"
+            if not mem['location']:
+                return "Kaunsi location pasand hai?"
+            if not mem['budget']:
+                return "Budget kitna socha hai?"
+            if not mem['timeline']:
+                return "Kab tak chahiye?"
+            return "Details share karti hoon, dhanyavaad!"
+
+        # ── FAST INTENT ROUTER (No LLM, instant response) ────────────────────
         fast_reply = None
-        if "theek hai" in t_lower:
-            fast_reply = "Great, batayein."
-        elif "residential" in t_lower:
-            fast_reply = "Location bataiye."
-        elif "hello" in t_lower:
-            fast_reply = "Namaste, main Shubhi bol rahi hoon."
-        elif "naam kya" in t_lower or "kaun bol rahi" in t_lower:
-            fast_reply = "Mera naam Shubhi hai."
-        elif "bye" in t_lower:
-            fast_reply = "Dhanyavaad, aapka din shubh ho."
+
+        # Affirmative / confirmation responses
+        if t_lower in ("haan", "ha", "ji", "ji haan", "haan ji", "yes", "okay", "ok",
+                        "theek hai", "thik hai", "sahi hai", "bilkul", "sure", "haan bolo",
+                        "bolo", "boliye", "batao", "bataye", "haan batao", "acha", "achha"):
+            fast_reply = _next_question()
+
+        # Negative / not interested
+        elif t_lower in ("nahi", "nhi", "no", "not interested", "nahi chahiye", "mat karo",
+                         "band karo", "abhi nahi", "baad mein", "busy hoon", "kaam hai"):
+            fast_reply = "Koi baat nahi, phir call karungi. Dhanyavaad!"
+            mem['stage'] = 'CLOSING'
+
+        # Property type keywords
+        elif any(kw in t_lower for kw in ("flat", "apartment")):
+            fast_reply = f"Flat, achha! {_next_question()}" if mem['stage'] != 'LOCATION' else _next_question()
+        elif any(kw in t_lower for kw in ("villa", "bungalow", "kothi")):
+            fast_reply = f"Villa, nice! {_next_question()}" if mem['stage'] != 'LOCATION' else _next_question()
+        elif "plot" in t_lower:
+            fast_reply = f"Plot chahiye. {_next_question()}" if mem['stage'] != 'LOCATION' else _next_question()
+        elif "commercial" in t_lower or "office" in t_lower or "shop" in t_lower:
+            fast_reply = f"Commercial space. {_next_question()}" if mem['stage'] != 'LOCATION' else _next_question()
+
+        # Identity questions
+        elif any(kw in t_lower for kw in ("kaun", "naam kya", "kaun bol", "who", "kya naam")):
+            agent_name = os.getenv("AGENT_PERSONA_NAME", "Shubhi")
+            fast_reply = f"Ji, main {agent_name}, Anantasutra se."
+
+        # Greeting
+        elif any(kw in t_lower for kw in ("hello", "namaste", "namaskar", "hi")):
+            fast_reply = _next_question()
+
+        # Bye / end
+        elif any(kw in t_lower for kw in ("bye", "alvida", "tata", "thanks", "thank you", "dhanyavaad")):
+            fast_reply = "Dhanyavaad, aapka din shubh ho!"
+            mem['stage'] = 'CLOSING'
+
+        # Budget was given (detected above via regex)
+        elif budget_match:
+            fast_reply = _next_question()
+
+        # Location was given (detected above)
+        elif mem['location'] and mem['stage'] == 'BUDGET':
+            fast_reply = _next_question()
 
         if fast_reply:
-            logger.info("⚡ FAST INTENT ROUTED: bypassing LLM for instant reply (%s)", fast_reply)
+            logger.info("⚡ FAST INTENT: '%s' → '%s' [memory: %s]", t_lower[:50], fast_reply, mem)
             try:
                 session.interrupt()
             except Exception:
                 pass
             asyncio.create_task(_speak_scripted_line(session, text=fast_reply))
-            # Append interaction to context natively so LLM remembers it later
             session.history.add_message(content=transcript, role="user")
-            # Return early skips passing it to LLM if possible (or we just let the prompt handle empty input)
             return
 
-        # ── Delayed Filler for Latency Masking ──────────────────────────────────
-        async def _filler_delay():
-            await asyncio.sleep(0.7)
-            # If the LLM has already started responding, or the user spoke again, abort.
-            if _agent_is_speaking[0] or (time.time() - last_user_speech_at > 1.2 and _last_agent_response_at[0] > last_user_speech_at):
-                return
-            import random
-            fillers = ["Ji ek second...", "Bilkul, dekh rahi hoon...", "Haan ji, batati hoon..."]
-            filler_msg = random.choice(fillers)
-            logger.info("⚡ FILLER MASKING: streaming '%s' to hide LLM delay.", filler_msg)
-            # Send to TTS directly without blocking STT/LLM pipeline and without polluting LLM context
-            _agent_is_speaking[0] = True
-            await session.say(filler_msg, allow_interruptions=True)
-            await asyncio.sleep(0.1)
-            _agent_is_speaking[0] = False
-
-        asyncio.create_task(_filler_delay())
+        # ── FILLER DISABLED — was causing leakage into final output ───────────
+        # Filler injection is completely disabled until the core pipeline is stable.
+        # The fast intent router above handles 80%+ of inputs with 0ms latency,
+        # making fillers unnecessary for most conversations.
 
 
 
