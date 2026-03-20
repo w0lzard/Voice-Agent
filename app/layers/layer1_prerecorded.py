@@ -31,6 +31,8 @@ DEFAULT_CLIPS: dict[str, str] = {
     "filler_okay":     "Achha...",
     "fallback_listen": "Aap thoda aur bata sakte hain?",
     "fallback_thinking": "Ek second, samajhne dijiye...",
+    "offtopic_redirect_hi": "Main date ke liye nahi hoon, property mein help kar sakti hoon.",
+    "feminine_confirm_hi": "Bilkul, main madad kar sakti hoon.",
     "identity_hi": "Main Shubhi bol rahi hoon, Anantasutra se.",
     "what_i_do_hi": "Main property options shortlist karne mein help karti hoon.",
     "busy_hi": (

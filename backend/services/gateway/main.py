@@ -112,5 +112,7 @@ if __name__ == "__main__":
         "gateway.main:app",
         host=config.API_HOST,
         port=config.API_PORT,
-        reload=True,
+        reload=os.getenv("UVICORN_RELOAD", "false").lower() == "true",
+        proxy_headers=True,
+        forwarded_allow_ips="*",
     )

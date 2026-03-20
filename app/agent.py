@@ -250,6 +250,8 @@ def _prerecorded_clip_for_text(text: str, language: str) -> bytes | None:
         _normalize_text("Achha, kis area mein dekh rahe hain?"): "ask_location_hi",
         _normalize_text("Budget kya socha hai?"): "ask_budget_hi",
         _normalize_text("Kab tak lena plan kar rahe hain?"): "ask_timeline_hi",
+        _normalize_text("Main date ke liye nahi hoon, property mein help kar sakti hoon."): "offtopic_redirect_hi",
+        _normalize_text("Bilkul, main madad kar sakti hoon."): "feminine_confirm_hi",
         _normalize_text(
             f"Main {os.getenv('AGENT_PERSONA_NAME', 'Shubhi')} bol rahi hoon, {os.getenv('AGENT_COMPANY_NAME', 'Anantasutra')} se."
         ): "identity_hi",
@@ -284,7 +286,7 @@ _AFFIRM_PHRASES = (
 
 _NEGATIVE_PHRASES = (
     "nahi", "nahin", "nhi", "not interested", "mat", "baad mein", "busy",
-    "\u0928\u0939\u0940\u0902", "\u0928\u093e", "\u092e\u0924",
+    "\u0928\u0939\u0940\u0902", "\u092e\u0924",
     "\u092c\u093e\u0926 \u092e\u0947\u0902", "\u0935\u094d\u092f\u0938\u094d\u0924",
 )
 
@@ -405,6 +407,29 @@ def _build_fast_reply(session, transcript: str) -> str | None:
             "Main property options shortlist karne mein help karti hoon.",
             "Main aapke liye suitable property options nikalwati hoon.",
         ])
+
+    if any(
+        phrase in text_lower
+        for phrase in (
+            "date karo", "date karoge", "date karogi", "mere sath date", "mere saath date",
+            "shaadi karogi", "shaadi karoge", "love you", "girlfriend", "boyfriend",
+            "\u0921\u0947\u091f \u0915\u0930\u094b", "\u0921\u0947\u091f \u0915\u0930\u094b\u0917\u0947",
+            "\u0921\u0947\u091f \u0915\u0930\u094b\u0917\u0940", "\u0936\u093e\u0926\u0940 \u0915\u0930\u094b\u0917\u0947",
+            "\u0936\u093e\u0926\u0940 \u0915\u0930\u094b\u0917\u0940",
+        )
+    ):
+        return use_cached("Main date ke liye nahi hoon, property mein help kar sakti hoon.")
+
+    if any(
+        phrase in text_lower
+        for phrase in (
+            "girl agent", "female agent", "ladki ho", "mahila agent",
+            "kar sakti", "not kar sakta", "not sakta", "sakta ya sakti",
+            "\u0932\u0921\u093c\u0915\u0940 \u0939\u094b", "\u0915\u0930 \u0938\u0915\u0924\u0940",
+            "\u0915\u0930 \u0938\u0915\u0924\u093e", "\u0938\u0915\u0924\u093e \u092f\u093e \u0938\u0915\u0924\u0940",
+        )
+    ):
+        return use_cached("Bilkul, main madad kar sakti hoon.")
 
     if (
         "mera naam" in text_lower
@@ -1164,6 +1189,8 @@ def prewarm(proc: agents.JobProcess) -> None:
         _layer1.add_clip("ask_location_hi", "Achha, kis area mein dekh rahe hain?")
         _layer1.add_clip("ask_budget_hi", "Budget kya socha hai?")
         _layer1.add_clip("ask_timeline_hi", "Kab tak lena plan kar rahe hain?")
+        _layer1.add_clip("offtopic_redirect_hi", "Main date ke liye nahi hoon, property mein help kar sakti hoon.")
+        _layer1.add_clip("feminine_confirm_hi", "Bilkul, main madad kar sakti hoon.")
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
