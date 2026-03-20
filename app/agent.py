@@ -1306,6 +1306,12 @@ async def _speak_scripted_line(
     """
     if _agent_is_speaking[0]:
         return  # prevent duplicate
+    # Check if session is closing to avoid RuntimeError
+    try:
+        if hasattr(session, '_is_closing') and session._is_closing:
+            return
+    except:
+        pass
     _agent_is_speaking[0] = True
     try:
         _remember_manual_agent_text(session, text, resolves_turn=resolves_turn)
@@ -1596,7 +1602,7 @@ async def entrypoint(ctx: agents.JobContext):
             tools=fnc_ctx.flatten(),
             allow_interruptions=True,
             min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.01),
-            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.08),
+            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.05),
             false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.2),
             user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
         )
@@ -1611,7 +1617,7 @@ async def entrypoint(ctx: agents.JobContext):
             turn_detection="realtime_llm",
             allow_interruptions=True,
             min_endpointing_delay=_get_float_env("SESSION_MIN_ENDPOINTING_DELAY", 0.01),
-            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.08),
+            max_endpointing_delay=_get_float_env("SESSION_MAX_ENDPOINTING_DELAY", 0.05),
             false_interruption_timeout=_get_float_env("SESSION_FALSE_INTERRUPTION_TIMEOUT", 0.2),
             user_away_timeout=_get_float_env("SESSION_USER_AWAY_TIMEOUT", 15.0),
         )
@@ -1817,7 +1823,7 @@ async def entrypoint(ctx: agents.JobContext):
             )
 
         async def _llm_safety_net():
-            await asyncio.sleep(_get_float_env("LLM_SAFETY_TIMEOUT_SEC", 3.0))
+            await asyncio.sleep(_get_float_env("LLM_SAFETY_TIMEOUT_SEC", 1.5))
             if not _turn_still_pending(turn_id) or _user_state[0] == "speaking" or _agent_state[0] == "speaking":
                 return
             _cancel_task(_layer2_task)
