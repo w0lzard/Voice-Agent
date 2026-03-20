@@ -30,6 +30,9 @@ def _resolve_bind_port() -> int:
 if __name__ == "__main__":
     host = _resolve_bind_host()
     port = _resolve_bind_port()
+    print(f"ENTRYPOINT_FILE={__file__}")
+    print(f"CWD={os.getcwd()}")
+    print(f"ENV_PORT={os.getenv('PORT')}")
     logger.info("Starting gateway on %s:%s", host, port)
 
     uvicorn.run(
