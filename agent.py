@@ -907,7 +907,7 @@ class TransferFunctions(llm.ToolContext):
             logger.error(f"Transfer failed: {e}")
             return f"Error executing transfer: {e}"
 
-    @llm.ai_callable(description="Store the user's property preferences (property_type, location, budget) into memory.")
+    @llm.function_tool(description="Store the user's property preferences (property_type, location, budget) into memory.")
     async def update_memory(self, property_type: str = "", location: str = "", budget: str = "") -> str:
         """
         Saves user real estate preferences into permanent Python memory tracking.
