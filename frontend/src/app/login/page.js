@@ -10,15 +10,8 @@ export default function LoginPage() {
     const { login } = useAuth();
     const router = useRouter();
 
-    const [tab, setTab] = useState('email'); // 'email' | 'phone'
-
-    // Email login state
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
-
-    // Phone login state
-    const [phone, setPhone] = useState('');
-
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
 
@@ -59,35 +52,6 @@ export default function LoginPage() {
         }
     };
 
-    const handlePhoneSubmit = async (e) => {
-        e.preventDefault();
-        setError('');
-
-        if (!phone) {
-            setError('Please enter your phone number.');
-            return;
-        }
-
-        setLoading(true);
-        try {
-            const res = await fetch(`${API_BASE}/v1/auth/phone-otp/send`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ phone })
-            });
-            const data = await res.json();
-            if (!res.ok || !data.ok) {
-                setError(data.error || 'Failed to send OTP. Please try again.');
-                return;
-            }
-            router.push(`/verify-phone?phone=${encodeURIComponent(phone)}`);
-        } catch {
-            setError('Network error. Please try again.');
-        } finally {
-            setLoading(false);
-        }
-    };
-
     const handleGoogle = () => {
         setError('Google OAuth not configured. Add GOOGLE_CLIENT_ID to .env');
     };
@@ -120,104 +84,36 @@ export default function LoginPage() {
                 <h1 className="auth-title">Welcome Back</h1>
                 <p className="auth-subtitle">Sign in to your VoiceAI Platform account</p>
 
-                <div
-                    style={{
-                        display: 'flex',
-                        gap: 6,
-                        marginBottom: 20,
-                        background: 'rgba(255,255,255,0.05)',
-                        borderRadius: 10,
-                        padding: 4
-                    }}
-                >
-                    <button
-                        type="button"
-                        onClick={() => { setTab('email'); setError(''); }}
-                        style={{
-                            flex: 1,
-                            padding: '8px 0',
-                            borderRadius: 7,
-                            border: 'none',
-                            cursor: 'pointer',
-                            fontSize: 13,
-                            fontWeight: 600,
-                            background: tab === 'email' ? '#2b6cee' : 'transparent',
-                            color: tab === 'email' ? '#fff' : '#6b7280',
-                            transition: 'all 0.15s'
-                        }}
-                    >
-                        Email
-                    </button>
-
-                    <button
-                        type="button"
-                        onClick={() => { setTab('phone'); setError(''); }}
-                        style={{
-                            flex: 1,
-                            padding: '8px 0',
-                            borderRadius: 7,
-                            border: 'none',
-                            cursor: 'pointer',
-                            fontSize: 13,
-                            fontWeight: 600,
-                            background: tab === 'phone' ? '#2b6cee' : 'transparent',
-                            color: tab === 'phone' ? '#fff' : '#6b7280',
-                            transition: 'all 0.15s'
-                        }}
-                    >
-                        Phone Number
-                    </button>
-                </div>
-
                 {error && <div className="auth-error">{error}</div>}
 
-                {tab === 'email' ? (
-                    <form className="auth-form" onSubmit={handleEmailSubmit}>
-                        <div className="form-group">
-                            <label>Email</label>
-                            <input
-                                type="email"
-                                placeholder="you@company.com"
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
-                                required
-                            />
-                        </div>
+                <form className="auth-form" onSubmit={handleEmailSubmit}>
+                    <div className="form-group">
+                        <label>Email</label>
+                        <input
+                            type="email"
+                            placeholder="you@company.com"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            required
+                        />
+                    </div>
 
-                        <div className="form-group">
-                            <label>Password</label>
-                            <input
-                                type="password"
-                                placeholder="Minimum 8 characters"
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                required
-                                minLength={8}
-                            />
-                        </div>
+                    <div className="form-group">
+                        <label>Password</label>
+                        <input
+                            type="password"
+                            placeholder="Minimum 8 characters"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            required
+                            minLength={8}
+                        />
+                    </div>
 
-                        <button type="submit" className="btn btn-primary" disabled={loading}>
-                            {loading ? 'Signing in...' : 'Sign In'}
-                        </button>
-                    </form>
-                ) : (
-                    <form className="auth-form" onSubmit={handlePhoneSubmit}>
-                        <div className="form-group">
-                            <label>Phone Number</label>
-                            <input
-                                type="tel"
-                                placeholder="+91 98765 43210"
-                                value={phone}
-                                onChange={(e) => setPhone(e.target.value)}
-                                required
-                            />
-                        </div>
-
-                        <button type="submit" className="btn btn-primary" disabled={loading}>
-                            {loading ? 'Signing in...' : 'Send OTP'}
-                        </button>
-                    </form>
-                )}
+                    <button type="submit" className="btn btn-primary" disabled={loading}>
+                        {loading ? 'Signing in...' : 'Sign In'}
+                    </button>
+                </form>
 
                 <div className="auth-divider">or</div>
 
