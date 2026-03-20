@@ -5,12 +5,19 @@ import json
 import time
 import tempfile
 import threading
+import sys
 from pathlib import Path
+
+# Add the project root to sys.path so that 'services', 'layers', etc. can be imported
+# reliably even if the script is run from a different CWD or via multiprocessing.
+_root_dir = Path(__file__).resolve().parent
+if str(_root_dir) not in sys.path:
+    sys.path.insert(0, str(_root_dir))
+
 from dotenv import load_dotenv
 import aiohttp
 
 # ── Load .env immediately — layer singletons read env vars at import time ─────
-_root_dir = Path(__file__).resolve().parent
 for _ep in (_root_dir / "backend" / ".env.local", _root_dir / ".env.local", _root_dir / ".env"):
     if _ep.exists():
         load_dotenv(_ep, override=True)
