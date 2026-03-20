@@ -97,7 +97,7 @@ async def _fetch_audio(
                         "Content-Type": "application/json",
                     },
                     json={
-                        "inputs":               [text[:_MAX_CHARS]],
+                        "inputs":               text[:_MAX_CHARS],
                         "target_language_code": language,
                         "speaker":              speaker,
                         "model":                model,
