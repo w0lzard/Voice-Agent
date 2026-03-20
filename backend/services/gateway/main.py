@@ -107,18 +107,18 @@ def create_app() -> FastAPI:
 
     # Public routes (no auth required)
     app.include_router(health.router, tags=["Health"])
-    app.include_router(auth.router, prefix="/api", tags=["Authentication"])
+    app.include_router(auth.router, prefix="/api/v1", tags=["Authentication"])
     # WebSocket monitor — must be public (WS upgrades can't send Bearer headers easily)
     app.include_router(monitor.router, tags=["Monitor"])
     
     # Protected routes (require auth when AUTH_ENABLED=true)
-    app.include_router(assistants.router, prefix="/api", tags=["Assistants"], dependencies=[Depends(get_current_user)])
-    app.include_router(phone_numbers.router, prefix="/api", tags=["Phone Numbers"], dependencies=[Depends(get_current_user)])
-    app.include_router(sip_configs.router, prefix="/api", tags=["SIP Configs"], dependencies=[Depends(get_current_user)])
-    app.include_router(campaigns.router, prefix="/api", tags=["Campaigns"], dependencies=[Depends(get_current_user)])
-    app.include_router(tools.router, prefix="/api", tags=["Tools"], dependencies=[Depends(get_current_user)])
-    app.include_router(calls.router, prefix="/api", tags=["Calls"], dependencies=[Depends(get_current_user)])
-    app.include_router(job_queue.router, prefix="/api", tags=["Queue"], dependencies=[Depends(get_current_user)])
+    app.include_router(assistants.router, prefix="/api/v1", tags=["Assistants"], dependencies=[Depends(get_current_user)])
+    app.include_router(phone_numbers.router, prefix="/api/v1", tags=["Phone Numbers"], dependencies=[Depends(get_current_user)])
+    app.include_router(sip_configs.router, prefix="/api/v1", tags=["SIP Configs"], dependencies=[Depends(get_current_user)])
+    app.include_router(campaigns.router, prefix="/api/v1", tags=["Campaigns"], dependencies=[Depends(get_current_user)])
+    app.include_router(tools.router, prefix="/api/v1", tags=["Tools"], dependencies=[Depends(get_current_user)])
+    app.include_router(calls.router, prefix="/api/v1", tags=["Calls"], dependencies=[Depends(get_current_user)])
+    app.include_router(job_queue.router, prefix="/api/v1", tags=["Queue"], dependencies=[Depends(get_current_user)])
     
     return app
 
