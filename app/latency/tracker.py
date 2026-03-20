@@ -118,7 +118,7 @@ class LatencyTracker:
         self._active: dict[str, LatencyEvent] = {}
         self._turn_counters: dict[str, int] = {}
         self._callbacks: list[Callable[[LatencyEvent], None]] = []
-        self._ws_url = ws_server_url or "http://localhost:8090/event"
+        self._ws_url = ws_server_url or "http://localhost:8081/event"
         self._session: Optional[aiohttp.ClientSession] = None
 
     # ── Public API ────────────────────────────────────────────────────────

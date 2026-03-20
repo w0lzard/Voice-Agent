@@ -16,7 +16,7 @@ import asyncio
 # ============================================================
 # CONFIGURATION
 # ============================================================
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8081"
 LOGIN_EMAIL = "test@test.com"
 LOGIN_PASSWORD = "test@test.com"
 

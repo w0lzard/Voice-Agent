@@ -152,7 +152,7 @@ def validate(
 
 # ── Async broadcast (non-blocking) ────────────────────────────────────────────
 
-_WS_SERVER_URL = "http://localhost:8090/event"
+_WS_SERVER_URL = "http://localhost:8081/event"
 
 # Module-level shared session — avoids creating (and leaking) a new TCP
 # connection for every single transcript event.  The force_close connector

@@ -95,7 +95,7 @@ class Config:
 
     # Server
     API_HOST = os.getenv("API_HOST", "0.0.0.0")
-    API_PORT = int(os.getenv("PORT") or os.getenv("API_PORT", "8000"))
+    API_PORT = int(os.getenv("PORT") or os.getenv("API_PORT", "8081"))
     
     # Internal Service Auth
     INTERNAL_API_KEY = os.getenv("INTERNAL_API_KEY", "vobiz_internal_secret_key_123")

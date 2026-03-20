@@ -902,7 +902,7 @@ async def _broadcast_interim(transcript: str, call_id: str) -> None:
     try:
         session = _get_interim_session()
         await session.post(
-            "http://localhost:8090/event",
+            "http://localhost:8081/event",
             json={
                 "type":       "transcript_interim",
                 "transcript": transcript,

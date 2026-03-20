@@ -37,7 +37,7 @@ except ImportError:
 # ============================================================
 # CONFIGURATION
 # ============================================================
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8081"
 
 # User Credentials
 LOGIN_EMAIL = "test@test.com"

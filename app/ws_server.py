@@ -260,7 +260,7 @@ async def health():
 if __name__ == "__main__":
     import uvicorn
 
-    # Use 'PORT' env var (Railway standard) with fallback to 'WS_SERVER_PORT' or 8080
-    port = int(os.getenv("PORT", os.getenv("WS_SERVER_PORT", "8080")))
+    # Use 'PORT' env var (Railway standard) with fallback to 'WS_SERVER_PORT' or 8081
+    port = int(os.getenv("PORT", os.getenv("WS_SERVER_PORT", "8081")))
     logger.info("Starting Voice Agent Metrics Server on port %d", port)
     uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
