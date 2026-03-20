@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect } from 'react';
+import { createContext, useContext, useState, useEffect, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { API_BASE } from '../lib/api';
 import { isAuthorizedAdmin } from '../lib/adminConfig';
@@ -23,6 +23,7 @@ export function AuthProvider({ children }) {
     const [user, setUser] = useState(null);
     const [loading, setLoading] = useState(true);
     const [token, setToken] = useState(null);
+    const loginRedirectRef = useRef(null);
 
     useEffect(() => {
         console.debug('AuthProvider initializing, API_BASE =', API_BASE);
@@ -70,12 +71,12 @@ export function AuthProvider({ children }) {
         }
     }
 
-    function login(jwt, userData) {
+    function login(jwt, userData, redirectTo = '/dashboard') {
         localStorage.setItem('ea_token', jwt);
         localStorage.setItem('ea_user', JSON.stringify(userData));
+        loginRedirectRef.current = redirectTo;
         setToken(jwt);
         setUser(userData);
-        router.replace('/dashboard');
     }
 
     function logout() {
@@ -88,11 +89,20 @@ export function AuthProvider({ children }) {
 
     const isPublicRoute = PUBLIC_ROUTES.includes(normalizedPath);
     const isAdminOnlyRoute = ADMIN_ONLY_ROUTES.includes(normalizedPath);
-    const isAdmin = isAuthorizedAdmin(user?.email);
+    const isAdmin = user?.role === 'admin' || isAuthorizedAdmin(user?.email);
 
     // Run redirects in an effect (never during render)
     useEffect(() => {
         if (loading) return;
+
+        // login() was just called — honour its redirect destination
+        if (loginRedirectRef.current) {
+            const dest = loginRedirectRef.current;
+            loginRedirectRef.current = null;
+            router.replace(dest);
+            return;
+        }
+
         if (!user && !isPublicRoute) {
             router.replace('/login');
         } else if (user && isPublicRoute) {

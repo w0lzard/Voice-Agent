@@ -130,6 +130,10 @@ export default function LoginPage() {
                 <div className="auth-footer">
                     Don&apos;t have an account? <Link href="/signup">Sign up</Link>
                 </div>
+
+                <div className="auth-footer" style={{ marginTop: 8, fontSize: 12 }}>
+                    Are you an admin? <Link href="/admin/login">Sign in here</Link>
+                </div>
             </div>
         </div>
     );
