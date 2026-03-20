@@ -11,6 +11,10 @@ from pathlib import Path
 from dotenv import load_dotenv
 import aiohttp
 
+# Automatically map Railway's dynamic PORT to LiveKit's HTTP server
+if os.getenv("PORT"):
+    os.environ["LIVEKIT_HTTP_SERVER_PORT"] = os.getenv("PORT")
+
 # ── DEBUG: Verifying path and package ─────────────────────────────────────────
 import sys
 import importlib
