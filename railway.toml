@@ -1,11 +1,8 @@
 [build]
 builder = "DOCKERFILE"
-dockerfilePath = "Dockerfile"
+dockerfilePath = "Dockerfile.gateway"
 
 [deploy]
-startCommand = "python -m app.agent start"
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 5
-
-# Agent is a background worker — no HTTP server to health-check
-healthcheckPath = ""
+healthcheckPath = "/health"
