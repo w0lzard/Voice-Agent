@@ -13,10 +13,11 @@ RUN uv pip install --system -r requirements.txt
 # Copy the entire app package
 COPY app ./app
 
-# DEBUG: Verify file structure
-RUN ls -R /opt/voice-agent
+# Build-time verification: fail fast if app package is missing
+RUN python -c "import importlib.util; spec = importlib.util.find_spec('app'); assert spec, 'app package not found at build time'"
 
 # Ensure python can resolve "app.*" modules
 ENV PYTHONPATH=/opt/voice-agent
 
-CMD ["python", "-m", "app.agent", "start"]
+# Use shell form so $PYTHONPATH is expanded at runtime
+CMD ["sh", "-c", "python -m app.agent start"]
