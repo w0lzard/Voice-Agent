@@ -1,8 +1,8 @@
 /**
- * Catch-all proxy: /api/v1/* → Railway Gateway /api/*
+ * Catch-all proxy: /api/v1/* → Railway Gateway /api/v1/*
  *
  * Responsibilities:
- *  1. Strip the /v1 prefix before forwarding to the backend
+ *  1. Forward requests to the backend (preserving the /v1 prefix)
  *  2. Normalize response format + call field names
  *  3. Transform auth responses (tokens.access_token → token)
  *  4. Compute dashboard stats / analytics from real call data
@@ -96,7 +96,7 @@ function normalise(path, data) {
 async function fetchAllCalls(authHeader, limit = 200) {
   if (!authHeader) return [];
   try {
-    const res = await fetch(`${GATEWAY_URL}/api/calls?limit=${limit}`, {
+    const res = await fetch(`${GATEWAY_URL}/api/v1/calls?limit=${limit}`, {
       headers: { Authorization: authHeader },
     });
     if (!res.ok) return [];
@@ -283,7 +283,7 @@ async function handleRequest(request, { params }, method) {
     const callId = transcriptMatch[1];
     if (!auth) return NextResponse.json({ ok: false, error: 'Unauthorized' }, { status: 401 });
     try {
-      const callRes = await fetch(`${GATEWAY_URL}/api/calls/${callId}`, {
+      const callRes = await fetch(`${GATEWAY_URL}/api/v1/calls/${callId}`, {
         headers: { Authorization: auth },
       });
       if (!callRes.ok) {
@@ -312,7 +312,7 @@ async function handleRequest(request, { params }, method) {
   // ── 7. Forward to backend gateway ─────────────────────────────────────────
   const { backendPath, transformBody, skipApiPrefix } = mapRequest(path, method);
   const searchParams = new URL(request.url).searchParams.toString();
-  const backendUrl = `${GATEWAY_URL}${skipApiPrefix ? '' : '/api'}${backendPath}${searchParams ? '?' + searchParams : ''}`;
+  const backendUrl = `${GATEWAY_URL}${skipApiPrefix ? '' : '/api/v1'}${backendPath}${searchParams ? '?' + searchParams : ''}`;
 
   // Short-circuit authenticated-only list endpoints when there is no token
   if (!auth && /^\/(calls|assistants|campaigns)(\/|$)/.test(path) && method === 'GET') {
