@@ -5,4 +5,4 @@ dockerfilePath = "Dockerfile.gateway"
 [deploy]
 restartPolicyType = "on_failure"
 restartPolicyMaxRetries = 5
-healthcheckPath = ""
+healthcheckPath = "/health"

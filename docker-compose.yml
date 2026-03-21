@@ -110,8 +110,8 @@ services:
   # ===================
   agent:
     build:
-      context: ./backend
-      dockerfile: services/agent/Dockerfile
+      context: .
+      dockerfile: backend/services/agent/Dockerfile
     container_name: vobiz-agent
     command: python services/agent/run_agent.py start
     env_file:

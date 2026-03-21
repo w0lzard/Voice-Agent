@@ -6,22 +6,25 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y gcc curl libglib2.0-0 && rm -rf /var/lib/apt/lists/*
 
 # Install Python dependencies
-RUN pip install uv
-COPY requirements.txt ./
+RUN pip install --no-cache-dir uv
+COPY backend/requirements.txt ./requirements.txt
 RUN uv pip install --system -r requirements.txt
 
 # Copy shared modules
-COPY shared ./shared
+COPY backend/shared ./shared
 
 # Copy for backwards compatibility (old imports like 'from database.models')
-COPY shared/database ./database
-COPY shared/auth ./auth
+COPY backend/shared/database ./database
+COPY backend/shared/auth ./auth
 
 # Copy services (needed for imports)
-COPY services ./services
+COPY backend/services ./services
 
 # Create logs directory
 RUN mkdir -p /app/logs
+
+# Build-time verification: fail fast if critical modules are missing
+RUN python -c "import importlib.util; assert importlib.util.find_spec('services.agent.worker'), 'services.agent.worker not found at build time'"
 
 # Expose no ports - agent connects outbound to LiveKit
 
