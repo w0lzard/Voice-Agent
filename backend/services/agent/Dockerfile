@@ -19,6 +19,7 @@ COPY shared/auth ./auth
 
 # Copy services (needed for imports)
 COPY services ./services
+COPY backend/app ./app
 
 # Create logs directory
 RUN mkdir -p /app/logs
