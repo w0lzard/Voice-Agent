@@ -88,7 +88,12 @@ def create_app() -> FastAPI:
     app.state.config_valid = True
     app.state.mongodb_ready = False
     
-    # Add CORS
+    # Add Rate Limiting (added first so it's inner)
+    from shared.middleware.rate_limiter import RateLimitMiddleware, rate_limiter
+    app.add_middleware(RateLimitMiddleware, rate_limiter=rate_limiter)
+
+    # Add CORS (added last so it's outermost — processes requests FIRST)
+    # This ensures CORS headers are always present, even on error responses.
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_allow_origins(),
@@ -96,10 +101,6 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    
-    # Add Rate Limiting
-    from shared.middleware.rate_limiter import RateLimitMiddleware, rate_limiter
-    app.add_middleware(RateLimitMiddleware, rate_limiter=rate_limiter)
     
     # Register routers
     from gateway.routers import calls, health, assistants, phone_numbers, sip_configs, campaigns, tools, job_queue, auth, monitor
