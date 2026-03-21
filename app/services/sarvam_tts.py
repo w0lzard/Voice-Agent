@@ -118,27 +118,24 @@ async def _fetch_audio(
                     
                 data = await resp.json()
                 
-                # Debug: Log full response structure
-                logger.error(f"Sarvam API full response: {data}")
-                logger.error(f"Response type: {type(data)}")
-                logger.error(f"Response keys: {list(data.keys()) if isinstance(data, dict) else 'Not a dict'}")
-                
                 # Validate response structure
                 if "audios" not in data or not data["audios"]:
                     logger.error(f"Sarvam TTS: Invalid response structure - missing 'audios': {data}")
                     raise RuntimeError(f"Sarvam TTS: No audio data in response")
                 
-                audio_data = data["audios"][0]
-                logger.error(f"Audio data keys: {list(audio_data.keys()) if isinstance(audio_data, dict) else 'Not a dict'}")
+                first_audio = data["audios"][0]
                 
-                if "audio_base64" not in audio_data:
-                    logger.error(f"Sarvam TTS: Invalid audio data - missing 'audio_base64': {audio_data}")
-                    # Check if there's an error message in response
-                    if "error" in data:
-                        raise RuntimeError(f"Sarvam TTS API error: {data['error']}")
-                    raise RuntimeError(f"Sarvam TTS: No audio_base64 in response")
+                # The API (bulbul:v2) sometimes returns a list of strings instead of a list of objects
+                if isinstance(first_audio, str):
+                    audio_b64 = first_audio
+                elif isinstance(first_audio, dict):
+                    if "audio_base64" in first_audio:
+                        audio_b64 = first_audio["audio_base64"]
+                    else:
+                        raise RuntimeError(f"Sarvam TTS: No audio_base64 in response object")
+                else:
+                    raise RuntimeError(f"Sarvam TTS: Unexpected audio data type: {type(first_audio)}")
                     
-                audio_b64 = audio_data["audio_base64"]
                 if not audio_b64:
                     raise RuntimeError(f"Sarvam TTS: Empty audio_base64 in response")
                     

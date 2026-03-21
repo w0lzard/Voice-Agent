@@ -42,7 +42,7 @@ def build_llm():
         model=model,
         api_key=os.getenv("OPENAI_API_KEY"),
         temperature=float(os.getenv("OPENAI_LLM_TEMPERATURE", "0.15")),
-        max_completion_tokens=int(os.getenv("OPENAI_LLM_MAX_TOKENS", "16")),
+        max_completion_tokens=int(os.getenv("OPENAI_LLM_MAX_TOKENS", "128")),
     )
 
 
